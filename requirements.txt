@@ -7,3 +7,6 @@ opencv-python
 PyWavelets
 scipy
 tqdm
+wfdb
+openpyxl
+scikit-learn
