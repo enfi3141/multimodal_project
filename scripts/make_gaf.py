@@ -218,18 +218,18 @@ def main():
     df = build_dataframe(args.root_dir)
 
     # 테스트용: 특정 ecg_id만 사용
-    if args.available_ecg_ids is not None:
-        df = df[df["ecg_id"].isin(args.available_ecg_ids)].reset_index(drop=True)
+    # if args.available_ecg_ids is not None:
+    #     df = df[df["ecg_id"].isin(args.available_ecg_ids)].reset_index(drop=True)
 
     train_df = split_dataframe(df, "train")
     val_df = split_dataframe(df, "val")
 
     # 테스트용으로 split이 비면 그냥 현재 df를 재사용
-    if len(train_df) == 0:
-        train_df = df.copy()
+    # if len(train_df) == 0:
+    #     train_df = df.copy()
 
-    if len(val_df) == 0:
-        val_df = df.copy()
+    # if len(val_df) == 0:
+    #     val_df = df.copy()
 
     save_split(
         df=train_df,
