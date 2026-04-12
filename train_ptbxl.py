@@ -52,10 +52,6 @@ def simple_stft_transform(ecg, fs=100, window_size=200, stride=100, out_size=224
 def build_dataloader(args, split):
     effective_split = split
 
-    # 테스트용: available_ecg_ids를 쓰는 동안 val은 train split 재사용
-    if args.available_ecg_ids is not None and split == "val":
-        effective_split = "train"
-
     dataset = PTBXLMultimodalDataset(
         root_dir=args.data,
         sampling_rate=args.sampling_rate,

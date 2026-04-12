@@ -1,3 +1,0 @@
-ecg_id,split,stft_path,label_0_NORM,label_1_MI,label_2_STTC,label_3_CD,label_4_HYP,age,sex,num_frames,channels,height,width
-1,val,data\processed\ptbxl\val\stft_npy\1.npy,1.0,0.0,0.0,0.0,0.0,56.0,1,9,3,224,224
-2,val,data\processed\ptbxl\val\stft_npy\2.npy,1.0,0.0,0.0,0.0,0.0,19.0,0,9,3,224,224

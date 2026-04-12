@@ -109,3 +109,13 @@ Thumbs.db
 # Cursor
 .cursorignore
 .cursorindexingignore
+
+# =========================
+# Multimodal project 추가
+# =========================
+*.npy
+*.png
+*.jpg
+*.jpeg
+experiments/
+outputs/

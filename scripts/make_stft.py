@@ -192,17 +192,8 @@ def main():
 
     df = build_dataframe(args.root_dir)
 
-    # ⭐ 여기 추가
-    df = df[df["ecg_id"].isin([1, 2])].reset_index(drop=True)
-
     train_df = split_dataframe(df, "train")
     val_df = split_dataframe(df, "val")
-
-    if len(train_df) == 0:
-        train_df = df.copy()
-
-    if len(val_df) == 0:
-        val_df = df.copy()
 
     save_split(
         df=train_df,
