@@ -14,32 +14,18 @@ echo ". /home/vscode/miniconda3/bin/activate" >> ~/.bashrc
 echo "conda activate llava" >> ~/.zshrc
 echo "conda activate llava" >> ~/.bashrc
 
+# Keep model caches outside the repo.
+echo 'export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"' >> ~/.bashrc
+echo 'export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"' >> ~/.zshrc
+echo 'export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$HF_HOME/transformers}"' >> ~/.bashrc
+echo 'export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$HF_HOME/transformers}"' >> ~/.zshrc
+
 # Add dotnet to PATH
 echo 'export PATH="$PATH:$HOME/.dotnet"' >> ~/.bashrc
 echo 'export PATH="$PATH:$HOME/.dotnet"' >> ~/.zshrc
 
-# Create and activate llava environment
-source /home/vscode/miniconda3/bin/activate
-conda create -y -q -n llava python=3.10
-conda activate llava
-
-# Install Nvidia Cuda Compiler
-conda install -y -c nvidia cuda-compiler
-
-pip install pre-commit==3.0.2
-
-# Install package locally
-pip install --upgrade pip  # enable PEP 660 support
-pip install -e .
-
-# Install additional packages for training
-pip install -e ".[train]"
-pip install flash-attn --no-build-isolation
-
-# Download checkpoints to location outside of the repo
-git clone https://huggingface.co/liuhaotian/llava-v1.5-7b ~/llava-v1.5-7b
-
-# Commented because it is unlikely for users to have enough local GPU memory to load the model
-# git clone https://huggingface.co/liuhaotian/llava-v1.5-13b ~/llava-v1.5-13b
+# Create the llava environment with the pinned setup used in this workspace.
+export LLAVA_INSTALL_CUDA_COMPILER=1
+bash ./scripts/setup_llava_env.sh
 
 echo "postCreateCommand.sh COMPLETE!"

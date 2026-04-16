@@ -16,6 +16,11 @@ __pycache__
 # Exclude Python virtual environment
 /venv
 
+# Exclude local caches and checkpoints
+/.hf-cache
+/checkpoints
+/playground/data
+
 # Exclude some weights
 /openai
 /liuhaotian

@@ -1,0 +1,8 @@
+# Official LLaVA install flow plus compatibility pins validated in this repo.
+#
+# Install this from the repo root after upgrading pip and pinning setuptools:
+#   python -m pip install -r requirements/llava-team.txt
+
+-e .[train]
+peft==0.7.1
+pre-commit==3.0.2
