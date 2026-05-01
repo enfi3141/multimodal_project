@@ -1,0 +1,186 @@
+{
+  "config": {
+    "model": "ekgan",
+    "data_dir": "/workspace/data/ptb-xl",
+    "train_folds": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "val_folds": [
+      9
+    ],
+    "test_folds": [
+      10
+    ],
+    "input_lead": "I",
+    "segment_len": 512,
+    "batch_size": 16,
+    "epochs": 30,
+    "learning_rate": 0.0001,
+    "loss": "mae",
+    "seed": 42
+  },
+  "splits": {
+    "train_records": 17418,
+    "val_records": 2183,
+    "test_records": 2198
+  },
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 0.29268187328256307,
+      "val_loss": 0.2958292325917822,
+      "train_segments": 17418,
+      "val_segments": 2183,
+      "improved": true
+    },
+    {
+      "epoch": 2,
+      "train_loss": 0.27545351754699526,
+      "val_loss": 0.29245692926601774,
+      "train_segments": 17418,
+      "val_segments": 2183,
+      "improved": true
+    },
+    {
+      "epoch": 3,
+      "train_loss": 0.27224653141010347,
+      "val_loss": 0.2910471138727926,
+      "train_segments": 17418,
+      "val_segments": 2183,
+      "improved": true
+    },
+    {
+      "epoch": 4,
+      "train_loss": 0.2700712348037734,
+      "val_loss": 0.2903518621286337,
+      "train_segments": 17418,
+      "val_segments": 2183,
+      "improved": true
+    },
+    {
+      "epoch": 5,
+      "train_loss": 0.2683378354713827,
+      "val_loss": 0.28988927341725707,
+      "train_segments": 17418,
+      "val_segments": 2183,
+      "improved": true
+    },
+    {
+      "epoch": 6,
+      "train_loss": 0.2668443368431403,
+      "val_loss": 0.2896624253179035,
+      "train_segments": 17418,
+      "val_segments": 2183,
+      "improved": true
+    },
+    {
+      "epoch": 7,
+      "train_loss": 0.26546379785618723,
+      "val_loss": 0.2895333895283024,
+      "train_segments": 17418,
+      "val_segments": 2183,
+      "improved": true
+    },
+    {
+      "epoch": 8,
+      "train_loss": 0.2641244639870877,
+      "val_loss": 0.2895742135978963,
+      "train_segments": 17418,
+      "val_segments": 2183,
+      "improved": false
+    },
+    {
+      "epoch": 9,
+      "train_loss": 0.2627725417976318,
+      "val_loss": 0.2897875793006298,
+      "train_segments": 17418,
+      "val_segments": 2183,
+      "improved": false
+    },
+    {
+      "epoch": 10,
+      "train_loss": 0.2613616836820862,
+      "val_loss": 0.29004082138085885,
+      "train_segments": 17418,
+      "val_segments": 2183,
+      "improved": false
+    },
+    {
+      "epoch": 11,
+      "train_loss": 0.2598564083610137,
+      "val_loss": 0.2907203373900295,
+      "train_segments": 17418,
+      "val_segments": 2183,
+      "improved": false
+    },
+    {
+      "epoch": 12,
+      "train_loss": 0.2582156753408679,
+      "val_loss": 0.29120169743134156,
+      "train_segments": 17418,
+      "val_segments": 2183,
+      "improved": false
+    }
+  ],
+  "best_val_loss": 0.2895333895283024,
+  "test": {
+    "num_segments": 2198,
+    "signal_len": 512,
+    "point_accuracy_no_input": 0.22924879410000829,
+    "pearson_no_input": 0.7245077157806766,
+    "mae_no_input": 0.41892552375793457,
+    "rmse_no_input": 0.6872522830963135,
+    "mae_per_lead": [
+      0.012058500200510025,
+      0.46802568435668945,
+      0.5610856413841248,
+      0.27421581745147705,
+      0.3405434489250183,
+      0.5886955857276917,
+      0.4069884419441223,
+      0.3880704939365387,
+      0.4047265648841858,
+      0.37914562225341797,
+      0.377555787563324,
+      0.4191315472126007
+    ],
+    "rmse_per_lead": [
+      0.025504378601908684,
+      0.724695086479187,
+      0.8677348494529724,
+      0.44442325830459595,
+      0.5589250326156616,
+      0.9007059931755066,
+      0.6384197473526001,
+      0.6668595671653748,
+      0.6985707879066467,
+      0.6526740193367004,
+      0.625900387763977,
+      0.6619098782539368
+    ],
+    "pearson_per_lead": [
+      0.9997253598777733,
+      0.6979197403409707,
+      0.5163989738483916,
+      0.897259728106047,
+      0.8318487714592702,
+      0.46695129119040163,
+      0.7766062651398826,
+      0.750360278340705,
+      0.7220114091691296,
+      0.7626132363256293,
+      0.7866280902275021,
+      0.7609870894395128
+    ],
+    "model": "ekgan",
+    "input_lead": "I",
+    "best_weights": "/workspace/ecg_models/ecg-recon/outputs_ptbxl_train/ekgan/best.weights.h5"
+  }
+}

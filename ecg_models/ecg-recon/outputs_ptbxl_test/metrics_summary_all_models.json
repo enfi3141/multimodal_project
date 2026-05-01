@@ -1,0 +1,18 @@
+{
+  "data_dir": "/workspace/data/ptb-xl",
+  "models": [
+    "ekgan",
+    "pix2pix"
+  ],
+  "input_lead": "I",
+  "test_folds": "10",
+  "records": 2198,
+  "results": {
+    "ekgan": {
+      "error": "Weights path not found for ekgan: /workspace/weights/ekgan.weights.h5"
+    },
+    "pix2pix": {
+      "error": "No module named 'pix2pix'"
+    }
+  }
+}
