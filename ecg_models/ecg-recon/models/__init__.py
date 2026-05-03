@@ -24,6 +24,7 @@ from .cdg_9 import CDGS9, CDGS9Loss # 추가
 from .cdg_10 import CDGS10, CDGS10Loss # 추가
 from .cdg_11 import CDGS11, CDGS11Loss # 추가
 from .cdg_12 import CDGS12, CDGS12Loss # 추가
+from .cdg_13 import CDGS13, CDGS13Loss # 추가
 
 __all__ = [
     "UNet_Hawkiyc",
@@ -59,6 +60,8 @@ __all__ = [
     "CDGS11Loss",
     "CDGS12",
     "CDGS12Loss",
+    "CDGS13",
+    "CDGS13Loss",
     "CDGSLoss",
     "describe_gaussians",
 ]

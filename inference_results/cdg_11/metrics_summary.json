@@ -1,0 +1,92 @@
+{
+  "model": "cdg_11",
+  "checkpoint": "/workspace/outputs/cdg_11/best.pt",
+  "data_dir": "/workspace/data/ptb-xl",
+  "test_folds": [
+    10
+  ],
+  "input_lead": "I",
+  "num_samples": 2198,
+  "prediction_shape": [
+    2198,
+    12,
+    1000
+  ],
+  "target_shape": [
+    2198,
+    12,
+    1000
+  ],
+  "weights": {
+    "total_params": 5408947,
+    "trainable_params": 5408947,
+    "weight_l2_norm": 138.46033689101492,
+    "weight_abs_mean": 0.03829728819335936,
+    "state_dict_keys": 175
+  },
+  "checkpoint_scalars": {
+    "epoch": 54.0
+  },
+  "load_strict": false,
+  "missing_keys_count": 0,
+  "unexpected_keys_count": 0,
+  "missing_keys_preview": [],
+  "unexpected_keys_preview": [],
+  "metrics": {
+    "mae_no_input": 0.3966578245162964,
+    "rmse_no_input": 0.6552491784095764,
+    "point_accuracy_no_input": 0.24330167921250723,
+    "pearson_no_input": 0.7582461106534325,
+    "acc_tolerance": 0.1,
+    "per_lead": {
+      "I": {
+        "mae": 0.023332901298999786,
+        "pearson": 0.9992033294277309
+      },
+      "II": {
+        "mae": 0.4471707046031952,
+        "pearson": 0.7201480779776802
+      },
+      "III": {
+        "mae": 0.5325819253921509,
+        "pearson": 0.5580491941160568
+      },
+      "aVR": {
+        "mae": 0.2599044442176819,
+        "pearson": 0.9065815354150352
+      },
+      "aVL": {
+        "mae": 0.3218761384487152,
+        "pearson": 0.8463051335144604
+      },
+      "aVF": {
+        "mae": 0.5636706948280334,
+        "pearson": 0.5074215605082504
+      },
+      "V1": {
+        "mae": 0.3852912187576294,
+        "pearson": 0.797971965653331
+      },
+      "V2": {
+        "mae": 0.3642241954803467,
+        "pearson": 0.7785944361095816
+      },
+      "V3": {
+        "mae": 0.38324645161628723,
+        "pearson": 0.7481103272683952
+      },
+      "V4": {
+        "mae": 0.35840511322021484,
+        "pearson": 0.7916567957246337
+      },
+      "V5": {
+        "mae": 0.35254937410354614,
+        "pearson": 0.8130737208980187
+      },
+      "V6": {
+        "mae": 0.3943139910697937,
+        "pearson": 0.7868964518679239
+      }
+    }
+  }
+}

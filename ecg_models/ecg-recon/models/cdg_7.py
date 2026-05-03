@@ -16,8 +16,8 @@ Docker (레포 루트에서, bash 기준) — **백그라운드 실행**
 nohup docker run --rm --gpus '"device=6"' \
     -v ~/project_jyu/physionet.org/files/ptb-xl/1.0.3:/workspace/data/ptb-xl \
     -v "$(pwd)":/workspace -w /workspace ecg-1to12 \
-    bash -c "python ecg_1to12/train_all_models.py --model cdg_7 --data_dir ./data/ptb-xl --epochs 30 --batch_size 4 --skip_download" \
-    > cdg_7_train.log 2>&1 </dev/null &
+    bash -c "python ecg_1to12/train_all_models.py --model cdg_13 --data_dir ./data/ptb-xl --epochs 30 --batch_size 16 --skip_download" \
+    > cdg_13_train.log 2>&1 </dev/null &
 """
 
 from __future__ import annotations

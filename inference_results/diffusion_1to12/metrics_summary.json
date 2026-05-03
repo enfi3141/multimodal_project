@@ -1,0 +1,134 @@
+{
+  "model": "diffusion_1to12",
+  "checkpoint": "outputs/beatdiff_1to12/best.pt",
+  "data_dir": "/workspace/data/ptb-xl",
+  "test_folds": [
+    10
+  ],
+  "input_lead": "I",
+  "num_samples": 2198,
+  "prediction_shape": [
+    2198,
+    12,
+    1000
+  ],
+  "target_shape": [
+    2198,
+    12,
+    1000
+  ],
+  "weights": {
+    "total_params": 1017382,
+    "trainable_params": 1017382,
+    "weight_l2_norm": 48.69737315748393,
+    "weight_abs_mean": 0.02825997018823648,
+    "state_dict_keys": 298
+  },
+  "checkpoint_scalars": {
+    "epoch": 3.0
+  },
+  "load_strict": false,
+  "missing_keys_count": 79,
+  "unexpected_keys_count": 298,
+  "missing_keys_preview": [
+    "betas",
+    "alphas",
+    "alphas_cumprod",
+    "sqrt_alphas_cumprod",
+    "sqrt_one_minus_alphas_cumprod",
+    "denoiser.time_mlp.1.weight",
+    "denoiser.time_mlp.1.bias",
+    "denoiser.time_mlp.3.weight",
+    "denoiser.time_mlp.3.bias",
+    "denoiser.enc1.norm1.weight",
+    "denoiser.enc1.norm1.bias",
+    "denoiser.enc1.conv1.weight",
+    "denoiser.enc1.conv1.bias",
+    "denoiser.enc1.norm2.weight",
+    "denoiser.enc1.norm2.bias",
+    "denoiser.enc1.conv2.weight",
+    "denoiser.enc1.conv2.bias",
+    "denoiser.enc1.time_proj.weight",
+    "denoiser.enc1.time_proj.bias",
+    "denoiser.enc1.skip.weight"
+  ],
+  "unexpected_keys_preview": [
+    "denoiser.noise_mlp.0.weight",
+    "denoiser.noise_mlp.0.bias",
+    "denoiser.noise_mlp.2.weight",
+    "denoiser.noise_mlp.2.bias",
+    "denoiser.enc_in.weight",
+    "denoiser.enc_in.bias",
+    "denoiser.encoder_blocks.0.0.conv1.weight",
+    "denoiser.encoder_blocks.0.0.conv1.bias",
+    "denoiser.encoder_blocks.0.0.skip_conv.weight",
+    "denoiser.encoder_blocks.0.0.skip_conv.bias",
+    "denoiser.encoder_blocks.0.0.norm1.weight",
+    "denoiser.encoder_blocks.0.0.norm1.bias",
+    "denoiser.encoder_blocks.0.0.norm2.weight",
+    "denoiser.encoder_blocks.0.0.norm2.bias",
+    "denoiser.encoder_blocks.0.0.time_proj.weight",
+    "denoiser.encoder_blocks.0.0.time_proj.bias",
+    "denoiser.encoder_blocks.0.0.conv2.weight",
+    "denoiser.encoder_blocks.0.0.conv2.bias",
+    "denoiser.encoder_blocks.0.1.conv1.weight",
+    "denoiser.encoder_blocks.0.1.conv1.bias"
+  ],
+  "metrics": {
+    "mae_no_input": 1.9194754362106323,
+    "rmse_no_input": 2.2707951068878174,
+    "point_accuracy_no_input": 0.02726333857225577,
+    "pearson_no_input": -0.005976703980417799,
+    "acc_tolerance": 0.1,
+    "per_lead": {
+      "I": {
+        "mae": 1.8817028999328613,
+        "pearson": 0.020076386003527215
+      },
+      "II": {
+        "mae": 1.804121971130371,
+        "pearson": -0.006429935879136594
+      },
+      "III": {
+        "mae": 1.9653630256652832,
+        "pearson": -0.0038839750331051944
+      },
+      "aVR": {
+        "mae": 1.9477545022964478,
+        "pearson": -0.04496602440571534
+      },
+      "aVL": {
+        "mae": 1.9866806268692017,
+        "pearson": -0.011622682914023004
+      },
+      "aVF": {
+        "mae": 1.9233909845352173,
+        "pearson": -0.00439752932327093
+      },
+      "V1": {
+        "mae": 1.882571816444397,
+        "pearson": -0.0037591355549576855
+      },
+      "V2": {
+        "mae": 1.9169923067092896,
+        "pearson": -0.0069073249118074805
+      },
+      "V3": {
+        "mae": 2.013493537902832,
+        "pearson": -0.008835325785911398
+      },
+      "V4": {
+        "mae": 1.9126453399658203,
+        "pearson": 0.010411478544545341
+      },
+      "V5": {
+        "mae": 1.8198270797729492,
+        "pearson": 0.03412561603017381
+      },
+      "V6": {
+        "mae": 1.941351056098938,
+        "pearson": -0.018108388356105936
+      }
+    }
+  }
+}

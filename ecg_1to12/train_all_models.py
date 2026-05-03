@@ -24,23 +24,29 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 import sys, os
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ecg_models'))
+# Docker/SSH 원격 환경과 로컬 Windows 환경의 폴더 구조 차이를 모두 지원하기 위한 절대 경로 3중 추가
+base_dir = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(base_dir))                                 # 1. /workspace/models
+sys.path.insert(0, str(base_dir / "ecg_models"))                  # 2. /workspace/ecg_models/models
+sys.path.insert(0, str(base_dir / "ecg_models" / "ecg-recon"))    # 3. /workspace/ecg_models/ecg-recon/models
 from models import (
     UNet_Hawkiyc, Generator_Zehui, Discriminator_Zehui, VAE_Zehui, LSTM_Zehui,
     ECGrecover_UMMISCO, MCMA_UNet3Plus, UNet1D_Baseline, Diffusion1to12,
     BeatDiff1to12,
     CDGS, CDGS2, CDGS3, CDGS4, CDGS5, CDGS6, CDGS7, CDGS8, CDGS9, CDGS10, CDGS11,
-    CDGS12,
+    CDGS12, CDGS13,
     CDGSLoss, CDGS2Loss, CDGS3Loss, CDGS4Loss, CDGS5Loss,
     CDGS6Loss, CDGS7Loss, CDGS8Loss, CDGS9Loss, CDGS10Loss, CDGS11Loss,
-    CDGS12Loss,
+    CDGS12Loss, CDGS13Loss,
 )
 from models.cdg_8 import get_param_groups
 from models.cdg_9 import get_param_groups as get_param_groups_9  
 from models.cdg_10 import get_param_groups as get_param_groups_10
 from models.cdg_11 import get_param_groups as get_param_groups_11
 from models.cdg_12 import get_param_groups as get_param_groups_12
+from models.cdg_13 import get_param_groups as get_param_groups_13
 
 LEADS    = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
 META_DIM = 6
@@ -55,6 +61,7 @@ MODEL_REGISTRY = {
     "cdg_10":          lambda: CDGS10(d_model=256, n_gaussians=512, n_encoder_layers=4),
     "cdg_11":          lambda: CDGS11(d_model=256, n_gaussians=512, n_encoder_layers=4),
     "cdg_12":          lambda: CDGS12(d_model=256, n_gaussians=32, n_encoder_layers=4, n_temporal_bases=8),
+    "cdg_13":          lambda: CDGS13(d_model=256, n_gaussians=64, n_encoder_layers=4, n_temporal_bases=16),
 }
 
 
@@ -211,8 +218,8 @@ def train_one_epoch(model, loader, optimizer, scaler, device, input_idx,
     model.train()
     run_loss = run_mae = 0.0
     dbg = {"vcg_m":0., "env":0., "amp":0., "gate":0., "steps":0}
-    # [v10] cdg_10은 1/r³ 물리 연산이 fp16 범위 초과 → AMP 비활성화
-    use_amp = device.type == "cuda" and model_name not in ("cdg_8", "cdg_10", "cdg_11", "cdg_12", "beatdiff_1to12")
+    # [v10] cdg_10~13은 1/r³ 물리 연산이 fp16 범위 초과 → AMP 비활성화
+    use_amp = device.type == "cuda" and model_name not in ("cdg_8", "cdg_10", "cdg_11", "cdg_12", "cdg_13", "beatdiff_1to12")
 
     for x, y, meta in tqdm(loader, desc="train", leave=False):
         x, y, meta = x.to(device), y.to(device), meta.to(device)
@@ -222,6 +229,33 @@ def train_one_epoch(model, loader, optimizer, scaler, device, input_idx,
             if model_name in ("diffusion_1to12", "beatdiff_1to12"):
                 actual_m = model.module if hasattr(model, "module") else model
                 loss, pred, loss_d = actual_m.loss_and_pred(x, y)
+            elif model_name == "cdg_13":
+                actual_m = model.module if hasattr(model, "module") else model
+                stage = actual_m.stage
+                lead_id = torch.full((x.size(0),), input_idx, dtype=torch.long, device=x.device)
+                
+                if stage == 1:
+                    pred, phys_out, extras = model(y, meta=meta, bypass_alpha=bypass_alpha)
+                    loss, loss_d = loss_fn(
+                        pred, y, extras["amplitude"], stage=stage,
+                        phys_out=phys_out, temporal_bases=extras.get("temporal_bases"),
+                        dipole_dir=extras.get("dipole_dir"), envelope_t=extras.get("envelope_t"),
+                    )
+                else:
+                    pred, phys_out, extras = model(x, meta=meta, bypass_alpha=bypass_alpha, lead_id=lead_id, x_12=y)
+                    loss, loss_d = loss_fn(
+                        pred, y, extras["amplitude"], stage=stage,
+                        phys_out=phys_out, temporal_bases=extras.get("temporal_bases"),
+                        dipole_dir=extras.get("dipole_dir"), envelope_t=extras.get("envelope_t"),
+                        extras=extras,
+                    )
+                dbg["env"]   += extras["envelope_t"].mean().item()
+                dbg["amp"]   += extras["amplitude"].mean().item()
+                dbg["gate"]  += extras["gate"].mean().item()
+                if "distill" in loss_d and torch.is_tensor(loss_d["distill"]) and loss_d["distill"].item() > 0:
+                    dbg["distill"] = dbg.get("distill", 0.) + loss_d["distill"].item()
+                dbg["steps"] += 1
+
             elif model_name == "cdg_12":
                 lead_id = torch.full((x.size(0),), input_idx, dtype=torch.long, device=x.device)
                 pred, phys_out, extras = model(x, meta=meta, bypass_alpha=bypass_alpha, lead_id=lead_id)
@@ -289,6 +323,11 @@ def train_one_epoch(model, loader, optimizer, scaler, device, input_idx,
                 pred = model(x)
                 loss = recon_loss(pred, y, input_idx)
 
+        # NaN loss 감지 → skip (가중치 오염 방지)
+        if torch.isnan(loss) or torch.isinf(loss):
+            optimizer.zero_grad(set_to_none=True)
+            continue
+
         if model_name == "cdg_8":
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -296,12 +335,17 @@ def train_one_epoch(model, loader, optimizer, scaler, device, input_idx,
         else:
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            # cdg_10: position gradient를 별도로 강하게 clip (1/r³ 안정화)
+            # cdg_10/11: position gradient를 별도로 강하게 clip (1/r³ 안정화)
             if model_name in ("cdg_10", "cdg_11"):  # cdg_12 제외: position이 buffer라 grad 없음
                 actual_m = model.module if hasattr(model, "module") else model
                 if hasattr(actual_m, "predictor") and hasattr(actual_m.predictor, "positions"):
                     if actual_m.predictor.positions.requires_grad:
                         torch.nn.utils.clip_grad_norm_([actual_m.predictor.positions], max_norm=0.1)
+            # cdg_13 Stage 1: position이 nn.Parameter → 강한 clip
+            if model_name == "cdg_13":
+                actual_m = model.module if hasattr(model, "module") else model
+                if hasattr(actual_m, "predictor") and actual_m.predictor.positions.requires_grad:
+                    torch.nn.utils.clip_grad_norm_([actual_m.predictor.positions], max_norm=0.1)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer); scaler.update()
 
@@ -310,7 +354,7 @@ def train_one_epoch(model, loader, optimizer, scaler, device, input_idx,
 
     n = len(loader.dataset)
     metrics = {"loss": run_loss/n, "mae_no_input": run_mae/n}
-    if model_name in ("cdg_9", "cdg_10", "cdg_11", "cdg_12") and dbg["steps"] > 0:
+    if model_name in ("cdg_9", "cdg_10", "cdg_11", "cdg_12", "cdg_13") and dbg["steps"] > 0:
         s = dbg["steps"]
         metrics["debug"] = {k: v/s for k,v in dbg.items() if k!="steps"}
     return metrics
@@ -328,6 +372,20 @@ def validate(model, loader, device, input_idx, model_name, loss_fn):
             actual_m = model.module if hasattr(model, "module") else model
             pred = actual_m.sample(x, steps=actual_m.val_sample_steps)
             loss = recon_loss(pred, y, input_idx)
+        elif model_name == "cdg_13":
+            actual_m = model.module if hasattr(model, "module") else model
+            stage = actual_m.stage
+            lead_id = torch.full((x.size(0),), input_idx, dtype=torch.long, device=x.device)
+            if stage == 1:
+                pred, _, extras = model(y, meta=meta, bypass_alpha=1.0)
+            else:
+                pred, _, extras = model(x, meta=meta, bypass_alpha=1.0, lead_id=lead_id)
+            
+            loss, _ = loss_fn(
+                pred, y, extras["amplitude"], stage=stage,
+                temporal_bases=extras.get("temporal_bases"),
+                dipole_dir=extras.get("dipole_dir"), envelope_t=extras.get("envelope_t"),
+            )
         elif model_name == "cdg_12":
             lead_id = torch.full((x.size(0),), input_idx, dtype=torch.long, device=x.device)
             pred, _, extras = model(x, meta=meta, bypass_alpha=1.0, lead_id=lead_id)
@@ -442,7 +500,9 @@ def main():
     if torch.cuda.device_count() > 1 and args.model not in ("diffusion_1to12", "beatdiff_1to12"):
         model = nn.DataParallel(model)
 
-    if args.model == "cdg_12":
+    if args.model == "cdg_13":
+        loss_fn = CDGS13Loss()
+    elif args.model == "cdg_12":
         loss_fn = CDGS12Loss()
     elif args.model == "cdg_11":
         loss_fn = CDGS11Loss()
@@ -459,7 +519,9 @@ def main():
 
     # ── Optimizer ───────────────────────────────────────────────────────────
     # [v9.5] cdg_9는 lr 그대로 사용 (2e-3 × 2 = 4e-3는 너무 높음)
-    if args.model in ("cdg_10", "cdg_11", "cdg_12"):
+    if args.model == "cdg_13":
+        train_lr = 1e-4  # Stage 1: learnable positions + physics → 낮은 lr 필요
+    elif args.model in ("cdg_10", "cdg_11", "cdg_12"):
         train_lr = args.lr
     elif args.model == "cdg_9":
         train_lr = args.lr  # 기본 2e-3
@@ -470,7 +532,11 @@ def main():
     else:
         train_lr = args.lr
     actual    = model.module if hasattr(model, "module") else model
-    if args.model == "cdg_12":
+    if args.model == "cdg_13":
+        pgs = get_param_groups_13(actual, args.weight_decay)
+        for pg in pgs: pg["lr"] = train_lr
+        optimizer = torch.optim.AdamW(pgs)
+    elif args.model == "cdg_12":
         pgs = get_param_groups_12(actual, args.weight_decay)
         for pg in pgs:
             pg["lr"] = train_lr
@@ -494,7 +560,9 @@ def main():
         optimizer = torch.optim.AdamW(model.parameters(), lr=train_lr, weight_decay=args.weight_decay)
 
     scaler    = torch.cuda.amp.GradScaler(enabled=(device.type=="cuda"))
-    scheduler = build_scheduler(optimizer, args.warmup_epochs, args.epochs, args.min_lr_ratio)
+    # CDG13: warmup 없이 바로 full lr에서 cosine decay
+    warmup_ep = 0 if args.model == "cdg_13" else args.warmup_epochs
+    scheduler = build_scheduler(optimizer, warmup_ep, args.epochs, args.min_lr_ratio)
 
     # EMA for diffusion models
     ema = None
@@ -504,8 +572,22 @@ def main():
     best_val = float("inf")
 
     for epoch in range(1, args.epochs+1):
-        # cdg_10: 초반은 physics 중심, epoch 30부터 bypass 점진 도입
-        if args.model in ("cdg_10", "cdg_11", "cdg_12"):
+        if args.model == "cdg_13":
+            actual_m = model.module if hasattr(model, "module") else model
+            # CDG13 2-stage 전환 로직
+            mid_epoch = args.epochs // 2 + 1
+            if epoch == mid_epoch:
+                actual_m.set_stage(2)
+                # Stage 2: random init encoder_1 → 더 낮은 lr로 안정적 학습
+                stage2_lr = 1e-4
+                pgs = get_param_groups_13(actual_m, args.weight_decay)
+                for pg in pgs: pg["lr"] = stage2_lr
+                optimizer = torch.optim.AdamW(pgs)
+                remaining = args.epochs - args.epochs // 2
+                scheduler = build_scheduler(optimizer, 0, remaining, args.min_lr_ratio)  # warmup 없이 바로 시작
+                print(f"  [CDG13] Stage 2 lr={stage2_lr:.1e}, remaining={remaining} epochs")
+            bypass_alpha = get_bypass_alpha(epoch - (mid_epoch if actual_m.stage == 2 else 0), warmup=10, full=20)
+        elif args.model in ("cdg_10", "cdg_11", "cdg_12"):
             # epoch 30부터 bypass 도입, 이후 완만히 1.0까지 증가
             bypass_alpha = get_bypass_alpha(epoch, warmup=29, full=45)
         else:
@@ -534,7 +616,14 @@ def main():
         )
         if "debug" in tr:
             d = tr["debug"]
-            if args.model == "cdg_12":
+            if args.model == "cdg_13":
+                actual_m = model.module if hasattr(model, "module") else model
+                dist_str = f"| Distill:{d['distill']:.3f}" if "distill" in d else ""
+                print(
+                    f"  \u2514\u2500 [{args.model} Stg{actual_m.stage}] Env:{d['env']:.3f} | Amp:{d['amp']:.3f} | "
+                    f"Gate(Phys%):{d['gate']:.3f} {dist_str}"
+                )
+            elif args.model == "cdg_12":
                 print(
                     f"  \u2514\u2500 [{args.model}] Env:{d['env']:.3f} | Amp:{d['amp']:.3f} | "
                     f"Gate(Phys%):{d['gate']:.3f} | Pos:FIXED"

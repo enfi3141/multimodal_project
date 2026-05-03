@@ -1,0 +1,92 @@
+{
+  "model": "mcma",
+  "checkpoint": "/workspace/outputs/mcma/best.pt",
+  "data_dir": "/workspace/data/ptb-xl",
+  "test_folds": [
+    10
+  ],
+  "input_lead": "I",
+  "num_samples": 2198,
+  "prediction_shape": [
+    2198,
+    12,
+    1000
+  ],
+  "target_shape": [
+    2198,
+    12,
+    1000
+  ],
+  "weights": {
+    "total_params": 18178236,
+    "trainable_params": 18178236,
+    "weight_l2_norm": 744.1586587209144,
+    "weight_abs_mean": 0.12774909396171769,
+    "state_dict_keys": 136
+  },
+  "checkpoint_scalars": {
+    "epoch": 16.0
+  },
+  "load_strict": false,
+  "missing_keys_count": 0,
+  "unexpected_keys_count": 0,
+  "missing_keys_preview": [],
+  "unexpected_keys_preview": [],
+  "metrics": {
+    "mae_no_input": 0.40157896280288696,
+    "rmse_no_input": 0.7460317611694336,
+    "point_accuracy_no_input": 0.24899528496980727,
+    "pearson_no_input": 0.7217164416185979,
+    "acc_tolerance": 0.1,
+    "per_lead": {
+      "I": {
+        "mae": 0.04901331290602684,
+        "pearson": 0.9961725713138593
+      },
+      "II": {
+        "mae": 0.44255000352859497,
+        "pearson": 0.6906254451366558
+      },
+      "III": {
+        "mae": 0.5238656997680664,
+        "pearson": 0.462355543619117
+      },
+      "aVR": {
+        "mae": 0.25805044174194336,
+        "pearson": 0.9055521826581163
+      },
+      "aVL": {
+        "mae": 0.3173237144947052,
+        "pearson": 0.8515374111231837
+      },
+      "aVF": {
+        "mae": 0.5574098229408264,
+        "pearson": 0.41929654988600856
+      },
+      "V1": {
+        "mae": 0.3989754021167755,
+        "pearson": 0.7878478400779738
+      },
+      "V2": {
+        "mae": 0.3795217275619507,
+        "pearson": 0.7650081412672216
+      },
+      "V3": {
+        "mae": 0.39974111318588257,
+        "pearson": 0.7066791197608283
+      },
+      "V4": {
+        "mae": 0.3709454834461212,
+        "pearson": 0.773453689281459
+      },
+      "V5": {
+        "mae": 0.36332058906555176,
+        "pearson": 0.7986755624928965
+      },
+      "V6": {
+        "mae": 0.4056647717952728,
+        "pearson": 0.7778480405121487
+      }
+    }
+  }
+}

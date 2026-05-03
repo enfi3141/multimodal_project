@@ -24,7 +24,7 @@ CDGS v12 (`cdg_12.py`): Identifiable Cardiac Gaussian Splatting
   관측:   ~9 독립전극 × 1000 timestep                        =   9,000
   비율:   CDG10 → 0.018:1 (severely under-determined ❌)
           CDG12 → 23.4:1  (over-determined ✅)
-"""
+""" 
 
 from __future__ import annotations
 
@@ -33,15 +33,227 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .cdg_10 import (
-    _ELECTRODE_POSITIONS,
-    _HEART_CENTER,
-    MultiScaleEncoder,
-    PhysicsRenderer,
-    ResidualBypass,
-    MetaPositionConditioner,
-    pearson_loss,
-)
+# ──────────────────────────────────────────────────────────────────────────────
+# 9개 전극 표준 좌표 (해부학적 기본값, 정규화 단위)
+# ──────────────────────────────────────────────────────────────────────────────
+_ELECTRODE_POSITIONS = torch.tensor([
+    # 사지 전극 (몸에서 멀리 → 위치 변동 무의미)
+    [ 0.30,  0.25,  0.00],   # RA (오른팔)
+    [-0.30,  0.25,  0.00],   # LA (왼팔)
+    [-0.05, -0.40,  0.00],   # LL (왼다리)
+    # 흉부 전극 (심장 가까이 → 위치 중요)
+    [ 0.03,  0.05,  0.20],   # V1 (4번째 늑간, 흉골 우연)
+    [ 0.00,  0.05,  0.22],   # V2 (4번째 늑간, 흉골 좌연)
+    [-0.04,  0.01,  0.21],   # V3 (V2-V4 중간)
+    [-0.08, -0.02,  0.18],   # V4 (5번째 늑간, 쇄골중선)
+    [-0.14, -0.02,  0.13],   # V5 (V4-V6 중간)
+    [-0.20, -0.02,  0.07],   # V6 (5번째 늑간, 중액와선)
+], dtype=torch.float32)
+
+# 심장 중심 좌표 (표준)
+_HEART_CENTER = torch.tensor([-0.03, 0.02, 0.10], dtype=torch.float32)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MetaPositionConditioner
+# ──────────────────────────────────────────────────────────────────────────────
+class MetaPositionConditioner(nn.Module):
+    def __init__(self, hidden_dim: int = 32):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(4, hidden_dim),   # age, sex, h, w
+            nn.GELU(),
+            nn.Linear(hidden_dim, 6),   # 3D offset + 3D scale
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, meta: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+        params = self.net(meta[:, :4])   # [B, 6]
+        offset = torch.tanh(params[:, :3]) * 0.02   # [B, 3] max +/-2cm shift
+        scale  = 1.0 + torch.tanh(params[:, 3:]) * 0.15  # [B, 3] +/-15% scaling
+
+        heart_center = _HEART_CENTER.to(positions.device)
+        centered = positions - heart_center
+        scaled = centered * scale.unsqueeze(1)  # [B, N, 3]
+        return scaled + heart_center + offset.unsqueeze(1)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Encoder Modules
+# ──────────────────────────────────────────────────────────────────────────────
+class DilatedConvBlock(nn.Module):
+    def __init__(self, in_ch, out_ch, dilations=(1, 2, 4, 8, 16)):
+        super().__init__()
+        ch_per = out_ch // len(dilations)
+        channels = [ch_per] * len(dilations)
+        channels[-1] += out_ch % len(dilations)
+        self.convs = nn.ModuleList([
+            nn.Conv1d(in_ch, c, kernel_size=5, padding=d * 2, dilation=d)
+            for c, d in zip(channels, dilations)
+        ])
+        self.bn    = nn.BatchNorm1d(out_ch)
+        self.merge = nn.Conv1d(out_ch, out_ch, 1)
+
+    def forward(self, x):
+        return F.gelu(self.merge(self.bn(torch.cat([c(x) for c in self.convs], dim=1))))
+
+class BeatAlignedStem(nn.Module):
+    def __init__(self, d_model: int = 256):
+        super().__init__()
+        self.stem    = nn.Conv1d(2, d_model, kernel_size=7, padding=3)
+        self.bn_stem = nn.BatchNorm1d(d_model)
+
+    def _r_energy(self, x: torch.Tensor) -> torch.Tensor:
+        diff = torch.diff(x, dim=-1, prepend=x[:, :, :1])
+        sq   = diff ** 2
+        k    = torch.ones(1, 1, 31, device=x.device, dtype=x.dtype) / 31.0
+        eng  = F.conv1d(sq, k, padding=15)[:, :, :x.size(-1)]
+        return eng / (eng.amax(dim=-1, keepdim=True) + 1e-6)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        r_ch = self._r_energy(x)
+        return F.gelu(self.bn_stem(self.stem(torch.cat([x, r_ch], dim=1))))
+
+class MultiScaleEncoder(nn.Module):
+    def __init__(self, d_model: int = 256, n_layers: int = 4):
+        super().__init__()
+        self.beat_stem  = BeatAlignedStem(d_model)
+        self.lead_embed = nn.Embedding(12, d_model)
+        self.cnn_blocks = nn.ModuleList([DilatedConvBlock(d_model, d_model) for _ in range(3)])
+        self.cnn_norms  = nn.ModuleList([nn.BatchNorm1d(d_model) for _ in range(3)])
+        self.downsample = nn.Conv1d(d_model, d_model, kernel_size=4, stride=4, padding=0)
+        self.tf_layers  = nn.ModuleList([
+            nn.TransformerEncoderLayer(
+                d_model=d_model, nhead=8, dim_feedforward=d_model * 4,
+                batch_first=True, dropout=0.1
+            )
+            for _ in range(n_layers)
+        ])
+
+    def forward(self, x: torch.Tensor, lead_id: torch.Tensor = None):
+        h = self.beat_stem(x)
+        if lead_id is not None:
+            h = h + self.lead_embed(lead_id).unsqueeze(-1)
+        for block, norm in zip(self.cnn_blocks, self.cnn_norms):
+            h = h + norm(block(h))
+        local_feat = h
+        h_seq = self.downsample(h).permute(0, 2, 1)
+        for layer in self.tf_layers:
+            h_seq = layer(h_seq)
+        return local_feat, h_seq.permute(0, 2, 1)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Physics Modules
+# ──────────────────────────────────────────────────────────────────────────────
+class LearnedAttenuation(nn.Module):
+    def __init__(self, hidden_dim: int = 32):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(7, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, 1),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, position: torch.Tensor, electrode: torch.Tensor) -> torch.Tensor:
+        B, N, _ = position.shape
+        K = electrode.shape[1]
+
+        pos_exp = position.unsqueeze(2).expand(-1, -1, K, -1)
+        elc_exp = electrode.unsqueeze(1).expand(-1, N, -1, -1)
+        r_vec = elc_exp - pos_exp
+
+        r_dist = r_vec.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+        r_hat = r_vec / r_dist
+
+        feat = torch.cat([pos_exp, r_hat, r_dist], dim=-1)
+        raw = self.net(feat).squeeze(-1)
+        return 1.0 + torch.tanh(raw) * 0.5
+
+class PhysicsRenderer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.register_buffer("electrode_base", _ELECTRODE_POSITIONS.clone())
+        self.attenuation = LearnedAttenuation()
+
+    def forward(self, position, dipole_dir, amplitude, envelope_t,
+                electrode_offset=None):
+        B, N, T = envelope_t.shape
+
+        E = self.electrode_base.unsqueeze(0).expand(B, -1, -1)
+        if electrode_offset is not None:
+            E = E + electrode_offset
+
+        amp_env = (amplitude.unsqueeze(-1) * envelope_t).unsqueeze(2)
+        if dipole_dir.ndim == 3:
+            moment = dipole_dir.unsqueeze(-1) * amp_env
+        elif dipole_dir.ndim == 4:
+            if dipole_dir.size(-1) != T:
+                raise ValueError("dipole_dir time dimension must match envelope_t")
+            moment = dipole_dir * amp_env
+        else:
+            raise ValueError("dipole_dir must be [B,N,3] or [B,N,3,T]")
+
+        r_vec = E.unsqueeze(1) - position.unsqueeze(2)
+
+        EPS_SQ = 0.04
+        r_dist_sq = (r_vec ** 2).sum(dim=-1)
+        attenuation_denom = (r_dist_sq + EPS_SQ) ** 1.5
+
+        correction = self.attenuation(position, E)
+
+        dot = torch.einsum('bndt,bnkd->bnkt', moment, r_vec)
+        V_per_gaussian = dot / attenuation_denom.unsqueeze(-1) * correction.unsqueeze(-1)
+
+        V_electrodes = V_per_gaussian.sum(dim=1)
+        V_electrodes = V_electrodes.clamp(-50.0, 50.0)
+
+        V_RA = V_electrodes[:, 0]
+        V_LA = V_electrodes[:, 1]
+        V_LL = V_electrodes[:, 2]
+        V_chest = V_electrodes[:, 3:9]
+
+        WCT = (V_RA + V_LA + V_LL) / 3.0
+
+        leads = torch.stack([
+            V_LA - V_RA,
+            V_LL - V_RA,
+            V_LL - V_LA,
+            -(V_LA + V_LL) / 2.0 + V_RA,
+            V_LA - (V_RA + V_LL) / 2.0,
+            V_LL - (V_RA + V_LA) / 2.0,
+        ], dim=1)
+
+        chest_leads = V_chest - WCT.unsqueeze(1)
+
+        v_leads = torch.cat([leads, chest_leads], dim=1)
+        return v_leads, V_electrodes
+
+class ResidualBypass(nn.Module):
+    def __init__(self, d_model: int = 256):
+        super().__init__()
+        hidden = d_model // 2
+        self.net = nn.Sequential(
+            nn.Conv1d(d_model, hidden, kernel_size=1),
+            nn.GELU(),
+            nn.Conv1d(hidden, hidden, kernel_size=5, padding=2),
+            nn.GELU(),
+            nn.Conv1d(hidden, hidden, kernel_size=5, padding=2),
+            nn.GELU(),
+            nn.Conv1d(hidden, 12, kernel_size=1),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, local_feat: torch.Tensor) -> torch.Tensor:
+        return self.net(local_feat)
+
+def pearson_loss(pred, target):
+    pred_c   = pred   - pred.mean(dim=-1, keepdim=True)
+    target_c = target - target.mean(dim=-1, keepdim=True)
+    num  = (pred_c * target_c).sum(dim=-1)
+    denom = pred_c.norm(dim=-1) * target_c.norm(dim=-1) + 1e-8
+    return 1.0 - (num / denom).mean()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -117,48 +329,63 @@ def get_param_groups(model: nn.Module, weight_decay: float):
 # ──────────────────────────────────────────────────────────────────────────────
 # 해부학적 Gaussian 위치 생성 (고정 — 학습되지 않음)
 # ──────────────────────────────────────────────────────────────────────────────
-def _fibonacci_sphere(n: int) -> torch.Tensor:
-    """n개의 점을 단위구면 위에 균등 배치."""
-    idx = torch.arange(n, dtype=torch.float32)
-    golden = (1.0 + math.sqrt(5.0)) / 2.0
-    theta = 2.0 * math.pi * idx / golden
-    z = 1.0 - (2.0 * idx + 1.0) / float(max(n, 1))
-    z = z.clamp(-0.99, 0.99)
-    r = torch.sqrt(1.0 - z * z)
-    return torch.stack([r * torch.cos(theta), r * torch.sin(theta), z], dim=-1)
-
-
 def _generate_anatomical_positions(n_gaussians: int = 32) -> torch.Tensor:
     """
-    심장 해부학적 4구역에 고정 배치된 Gaussian 위치 생성.
-
-    구역:
-      1. RA/SA node region  (우심방 상방 — P파 생성 주도)
-      2. Septum             (중격 — QRS 초기 탈분극)
-      3. LV free wall       (좌심실 자유벽 — QRS 주도)
-      4. RV free wall       (우심실 자유벽 — QRS 보조)
-
-    각 구역에 n_gaussians//4 개씩 Fibonacci sphere 분포.
+    AHA 17-Segment Model (Left Ventricle) + RV/Atria 확장을 통한 32구역 전심장 모델.
+    
+    출처: 
+    Cerqueira MD, Weissman NJ, Dilsizian V, et al. "Standardized myocardial 
+    segmentation and nomenclature for tomographic imaging of the heart." 
+    Circulation. 2002;105(4):539-542.
+    
+    구분 (총 32 Gaussians):
+      - LV (AHA 17-segment): 17개 (Basal 6, Mid 6, Apical 4, Apex 1)
+      - RV (우심실 자유벽): 9개 (Basal 3, Mid 3, Apical 3)
+      - Atria (심방): 6개 (RA 3, LA 3)
     """
-    n_per_zone = n_gaussians // 4
-    remainder = n_gaussians % 4
-
-    zones = [
-        # (center_offset from heart_center, radius)
-        (torch.tensor([ 0.01,  0.04,  0.02]), 0.025),  # RA / SA node
-        (torch.tensor([ 0.00,  0.00,  0.01]), 0.020),  # Septum
-        (torch.tensor([-0.04, -0.02, -0.01]), 0.030),  # LV free wall
-        (torch.tensor([ 0.03,  0.01,  0.02]), 0.025),  # RV free wall
-    ]
-
-    all_positions = []
-    for i, (center_offset, radius) in enumerate(zones):
-        n = n_per_zone + (1 if i < remainder else 0)
-        sphere_pts = _fibonacci_sphere(n) * radius
-        zone_center = _HEART_CENTER + center_offset
-        all_positions.append(sphere_pts + zone_center)
-
-    return torch.cat(all_positions, dim=0)  # [N, 3]
+    assert n_gaussians == 32, "이 함수는 32개의 Gaussian을 위해 설계되었습니다."
+    
+    positions = []
+    
+    # --- 1. 좌심실 (LV) - AHA 17 Segments ---
+    def add_ring(z, r, n_segs, start_angle_deg):
+        for i in range(n_segs):
+            angle = math.radians(start_angle_deg + i * (360.0 / n_segs))
+            x = r * math.cos(angle)
+            y = r * math.sin(angle)
+            positions.append([x, y, z])
+            
+    add_ring(z=0.02,  r=0.030, n_segs=6, start_angle_deg=30)  # Basal (6)
+    add_ring(z=0.00,  r=0.028, n_segs=6, start_angle_deg=30)  # Mid (6)
+    add_ring(z=-0.02, r=0.015, n_segs=4, start_angle_deg=45)  # Apical (4)
+    positions.append([0.0, 0.0, -0.035])                      # Apex (1)
+    
+    # --- 2. 우심실 (RV) - 9 Segments ---
+    def add_rv_arc(z, r, n_segs):
+        angles = [60, 90, 120]  # 우전방을 감싸는 각도
+        for angle_deg in angles:
+            angle = math.radians(angle_deg)
+            x = r * math.cos(angle)
+            y = r * math.sin(angle)
+            positions.append([x, y, z])
+            
+    add_rv_arc(z=0.02,  r=0.045, n_segs=3) # RV Basal (3)
+    add_rv_arc(z=0.00,  r=0.042, n_segs=3) # RV Mid (3)
+    add_rv_arc(z=-0.02, r=0.025, n_segs=3) # RV Apical (3)
+    
+    # --- 3. 심방 (Atria) - 6 Segments ---
+    # 우심방(RA): 3개 (우측 상방)
+    positions.append([ 0.02,  0.03, 0.04])
+    positions.append([ 0.03,  0.02, 0.05])
+    positions.append([ 0.02,  0.01, 0.06])
+    
+    # 좌심방(LA): 3개 (좌측 후방)
+    positions.append([-0.02, -0.03, 0.04])
+    positions.append([-0.03, -0.02, 0.05])
+    positions.append([-0.02, -0.01, 0.06])
+    
+    pos_tensor = torch.tensor(positions, dtype=torch.float32)
+    return pos_tensor + _HEART_CENTER
 
 
 # ──────────────────────────────────────────────────────────────────────────────
