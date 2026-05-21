@@ -1,0 +1,12 @@
+{
+  "base_ch": 32,
+  "res_base_ch": 16,
+  "residual_scale": 0.3,
+  "prior_dim": 64,
+  "use_meta": true,
+  "use_hr": false,
+  "seed": 42,
+  "train_pairs": 2395,
+  "val_pairs": 241,
+  "test_pairs": 294
+}
