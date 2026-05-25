@@ -6,9 +6,11 @@ import pandas as pd
 EXPERIMENT_NAMES = {
     "raw1": "Baseline 1 (Raw 1-lead)",
     "recon12": "Baseline 2 (Reconstructed 12-lead)",
-    "raw1_recon12": "Ours w/o Metadata",
-    "raw1_recon12_meta": "Ours (Proposed)",
+    "recon12_meta": "Recon 12-lead + Meta",
+    "raw1_recon12": "Baseline 3 (Raw + Recon)",
+    "raw1_recon12_meta": "Ours (Raw + Recon + Meta)",
     "real12": "Upper Bound (Real 12-lead)",
+    "real12_meta": "Upper Bound + Meta",
 }
 
 

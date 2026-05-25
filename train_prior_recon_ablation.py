@@ -342,6 +342,15 @@ def build_model(args, meta_in_dim):
             use_meta=False,
             meta_in_dim=meta_in_dim,
         )
+    
+    elif args.experiment == "recon12_meta":
+        return SingleECGClassifier(
+            input_key="recon_12lead",
+            in_channels=12,
+            num_classes=args.num_classes,
+            use_meta=True,
+            meta_in_dim=meta_in_dim,
+        )
 
     elif args.experiment == "raw1_recon12":
         return RawReconClassifier(
@@ -595,6 +604,7 @@ def main():
         choices=[
             "raw1",
             "recon12",
+            "recon12_meta",
             "raw1_recon12",
             "raw1_recon12_meta",
             "real12",
