@@ -407,15 +407,48 @@ def build_loader(args, split):
 
 
 def compute_metrics(y_true, y_prob, threshold=0.5):
+    """
+    Multi-label classification metrics.
+
+    Returns:
+      macro_f1
+      macro_auc
+      accuracy
+      sensitivity
+      specificity
+      per_label_auc
+      per_label_detail
+    """
+
     y_pred = (y_prob >= threshold).astype(np.float32)
-    macro_f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
+
+    # 1) Accuracy: 전체 label position 기준 정확도
+    # shape: (N, 5)이므로 NORM, MI, STTC, CD, HYP 전체에 대해 평균
+    accuracy = float((y_pred == y_true).mean())
+
+    # 2) Macro F1
+    macro_f1 = f1_score(
+        y_true,
+        y_pred,
+        average="macro",
+        zero_division=0
+    )
 
     per_label_auc = {}
+    per_label_detail = {}
+
     auc_values = []
+    sensitivity_values = []
+    specificity_values = []
 
     for i, name in enumerate(LABEL_NAMES):
+        yt = y_true[:, i]
+        yp = y_pred[:, i]
+        yscore = y_prob[:, i]
+
+        # AUROC
         try:
-            auc = roc_auc_score(y_true[:, i], y_prob[:, i])
+            auc = roc_auc_score(yt, yscore)
         except ValueError:
             auc = float("nan")
 
@@ -424,8 +457,49 @@ def compute_metrics(y_true, y_prob, threshold=0.5):
         if not np.isnan(auc):
             auc_values.append(auc)
 
+        # Confusion matrix components
+        tp = np.sum((yt == 1) & (yp == 1))
+        tn = np.sum((yt == 0) & (yp == 0))
+        fp = np.sum((yt == 0) & (yp == 1))
+        fn = np.sum((yt == 1) & (yp == 0))
+
+        # Sensitivity = Recall = TP / (TP + FN)
+        if tp + fn > 0:
+            sensitivity = tp / (tp + fn)
+            sensitivity_values.append(sensitivity)
+        else:
+            sensitivity = float("nan")
+
+        # Specificity = TN / (TN + FP)
+        if tn + fp > 0:
+            specificity = tn / (tn + fp)
+            specificity_values.append(specificity)
+        else:
+            specificity = float("nan")
+
+        per_label_detail[name] = {
+            "auc": float(auc),
+            "sensitivity": float(sensitivity),
+            "specificity": float(specificity),
+            "tp": int(tp),
+            "tn": int(tn),
+            "fp": int(fp),
+            "fn": int(fn),
+        }
+
     macro_auc = float(np.mean(auc_values)) if len(auc_values) > 0 else float("nan")
-    return float(macro_f1), macro_auc, per_label_auc
+    macro_sensitivity = float(np.mean(sensitivity_values)) if len(sensitivity_values) > 0 else float("nan")
+    macro_specificity = float(np.mean(specificity_values)) if len(specificity_values) > 0 else float("nan")
+
+    return (
+        float(macro_f1),
+        macro_auc,
+        accuracy,
+        macro_sensitivity,
+        macro_specificity,
+        per_label_auc,
+        per_label_detail,
+    )
 
 
 def train_one_epoch(loader, model, criterion, optimizer, device):
@@ -474,10 +548,28 @@ def evaluate(loader, model, criterion, device):
     y_true = np.concatenate(all_targets, axis=0)
     y_prob = np.concatenate(all_probs, axis=0)
 
-    macro_f1, macro_auc, per_label_auc = compute_metrics(y_true, y_prob)
+    (
+        macro_f1,
+        macro_auc,
+        accuracy,
+        sensitivity,
+        specificity,
+        per_label_auc,
+        per_label_detail,
+    ) = compute_metrics(y_true, y_prob)
+
     avg_loss = total_loss / len(loader.dataset)
 
-    return avg_loss, macro_f1, macro_auc, per_label_auc
+    return (
+        avg_loss,
+        macro_f1,
+        macro_auc,
+        accuracy,
+        sensitivity,
+        specificity,
+        per_label_auc,
+        per_label_detail,
+    )
 
 
 def save_json(path, obj):
@@ -564,29 +656,44 @@ def main():
             trainloader, model, criterion, optimizer, device
         )
 
-        val_loss, val_f1, val_auc, val_per_label_auc = evaluate(
-            valloader, model, criterion, device
-        )
+        (
+            val_loss,
+            val_f1,
+            val_auc,
+            val_acc,
+            val_sens,
+            val_spec,
+            val_per_label_auc,
+            val_per_label_detail,
+        ) = evaluate(valloader, model, criterion, device)
 
         row = {
             "epoch": epoch + 1,
             "train_loss": float(train_loss),
             "val_loss": float(val_loss),
+            "val_accuracy": float(val_acc),
             "val_macro_f1": float(val_f1),
             "val_macro_auc": float(val_auc),
+            "val_sensitivity": float(val_sens),
+            "val_specificity": float(val_spec),
             "val_per_label_auc": val_per_label_auc,
+            "val_per_label_detail": val_per_label_detail,
         }
         history.append(row)
 
         print(
             "[Epoch {}/{}] train_loss={:.4f} val_loss={:.4f} "
-            "val_macro_f1={:.4f} val_macro_auc={:.4f}".format(
+            "val_acc={:.4f} val_macro_f1={:.4f} val_macro_auc={:.4f} "
+            "val_sens={:.4f} val_spec={:.4f}".format(
                 epoch + 1,
                 args.epochs,
                 train_loss,
                 val_loss,
+                val_acc,
                 val_f1,
                 val_auc,
+                val_sens,
+                val_spec,
             )
         )
 
@@ -624,15 +731,26 @@ def main():
         checkpoint = torch.load(ckpt_path, map_location=device)
         model.load_state_dict(checkpoint["model_state_dict"])
 
-    test_loss, test_f1, test_auc, test_per_label_auc = evaluate(
-        testloader, model, criterion, device
-    )
+    (
+        test_loss,
+        test_f1,
+        test_auc,
+        test_acc,
+        test_sens,
+        test_spec,
+        test_per_label_auc,
+        test_per_label_detail,
+    ) = evaluate(testloader, model, criterion, device)
 
     test_metrics = {
         "test_loss": float(test_loss),
+        "test_accuracy": float(test_acc),
         "test_macro_f1": float(test_f1),
         "test_macro_auc": float(test_auc),
+        "test_sensitivity": float(test_sens),
+        "test_specificity": float(test_spec),
         "test_per_label_auc": test_per_label_auc,
+        "test_per_label_detail": test_per_label_detail,
         "best_epoch": int(best_epoch),
         "best_val_macro_auc": float(best_auc),
         "label_names": LABEL_NAMES,
@@ -641,10 +759,14 @@ def main():
     save_json(os.path.join(save_dir, "test_metrics.json"), test_metrics)
 
     print(
-        "[TEST] loss={:.4f} macro_f1={:.4f} macro_auc={:.4f}".format(
+        "[TEST] loss={:.4f} acc={:.4f} macro_f1={:.4f} macro_auc={:.4f} "
+        "sens={:.4f} spec={:.4f}".format(
             test_loss,
+            test_acc,
             test_f1,
             test_auc,
+            test_sens,
+            test_spec,
         )
     )
     print(
