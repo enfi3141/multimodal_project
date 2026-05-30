@@ -267,10 +267,12 @@ class RawReconClassifier(nn.Module):
         use_meta=False,
         meta_in_dim=3,
         meta_feature_dim=16,
+        fusion_type="concat",
     ):
         super().__init__()
 
         self.use_meta = use_meta
+        self.fusion_type = fusion_type
 
         self.raw_encoder = RawECGEncoder(
             in_channels=1,
@@ -290,8 +292,6 @@ class RawReconClassifier(nn.Module):
             base_channels=base_channels,
         )
 
-        fusion_dim = raw_feature_dim + recon_feature_dim
-
         if use_meta:
             self.meta_encoder = MetadataEncoder(
                 in_dim=meta_in_dim,
@@ -299,28 +299,103 @@ class RawReconClassifier(nn.Module):
                 feature_dim=meta_feature_dim,
                 dropout=0.1,
             )
-            fusion_dim += meta_feature_dim
         else:
             self.meta_encoder = None
 
-        self.classifier = nn.Sequential(
-            nn.Linear(fusion_dim, 128),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(128, num_classes),
-        )
+        # concat fusion
+        if fusion_type == "concat":
+            fusion_dim = raw_feature_dim + recon_feature_dim
+            if use_meta:
+                fusion_dim += meta_feature_dim
+
+            self.classifier = nn.Sequential(
+                nn.Linear(fusion_dim, 128),
+                nn.ReLU(inplace=True),
+                nn.Dropout(dropout),
+                nn.Linear(128, num_classes),
+            )
+
+        # weighted fusion: raw/recon을 같은 128차원에서 가중합
+        elif fusion_type == "weighted":
+            if raw_feature_dim != recon_feature_dim:
+                raise ValueError("weighted fusion requires raw_feature_dim == recon_feature_dim")
+
+            self.branch_weights = nn.Parameter(torch.ones(2))
+
+            fusion_dim = raw_feature_dim
+            if use_meta:
+                fusion_dim += meta_feature_dim
+
+            self.classifier = nn.Sequential(
+                nn.Linear(fusion_dim, 128),
+                nn.ReLU(inplace=True),
+                nn.Dropout(dropout),
+                nn.Linear(128, num_classes),
+            )
+
+        # gated fusion: raw/recon feature를 보고 sample별 gate 생성
+        elif fusion_type == "gated":
+            if raw_feature_dim != recon_feature_dim:
+                raise ValueError("gated fusion requires raw_feature_dim == recon_feature_dim")
+
+            self.gate = nn.Sequential(
+                nn.Linear(raw_feature_dim + recon_feature_dim, raw_feature_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(raw_feature_dim, raw_feature_dim),
+                nn.Sigmoid(),
+            )
+
+            fusion_dim = raw_feature_dim
+            if use_meta:
+                fusion_dim += meta_feature_dim
+
+            self.classifier = nn.Sequential(
+                nn.Linear(fusion_dim, 128),
+                nn.ReLU(inplace=True),
+                nn.Dropout(dropout),
+                nn.Linear(128, num_classes),
+            )
+
+        else:
+            raise ValueError("Unknown fusion_type: {}".format(fusion_type))
 
     def forward(self, batch):
         raw_feat = self.raw_encoder(batch["raw_1lead"])
         recon_feat = self.recon_encoder(batch["recon_12lead"])
 
-        feats = [raw_feat, recon_feat]
-
+        meta_feat = None
         if self.use_meta:
             meta_feat = self.meta_encoder(batch["metadata"])
-            feats.append(meta_feat)
 
-        fused = torch.cat(feats, dim=1)
+        if self.fusion_type == "concat":
+            feats = [raw_feat, recon_feat]
+            if self.use_meta:
+                feats.append(meta_feat)
+            fused = torch.cat(feats, dim=1)
+
+        elif self.fusion_type == "weighted":
+            weights = torch.softmax(self.branch_weights, dim=0)
+            fused_ecg = weights[0] * raw_feat + weights[1] * recon_feat
+
+            if self.use_meta:
+                fused = torch.cat([fused_ecg, meta_feat], dim=1)
+            else:
+                fused = fused_ecg
+
+        elif self.fusion_type == "gated":
+            gate_input = torch.cat([raw_feat, recon_feat], dim=1)
+            gate = self.gate(gate_input)
+
+            fused_ecg = gate * raw_feat + (1.0 - gate) * recon_feat
+
+            if self.use_meta:
+                fused = torch.cat([fused_ecg, meta_feat], dim=1)
+            else:
+                fused = fused_ecg
+
+        else:
+            raise ValueError("Unknown fusion_type: {}".format(self.fusion_type))
+
         return self.classifier(fused)
 
 
@@ -350,6 +425,7 @@ def build_model(args, meta_in_dim):
             num_classes=args.num_classes,
             use_meta=True,
             meta_in_dim=meta_in_dim,
+            fusion_type=args.fusion,
         )
 
     elif args.experiment == "raw1_recon12":
@@ -357,6 +433,7 @@ def build_model(args, meta_in_dim):
             num_classes=args.num_classes,
             use_meta=False,
             meta_in_dim=meta_in_dim,
+            fusion_type=args.fusion,
         )
 
     elif args.experiment == "raw1_recon12_meta":
@@ -364,6 +441,7 @@ def build_model(args, meta_in_dim):
             num_classes=args.num_classes,
             use_meta=True,
             meta_in_dim=meta_in_dim,
+            fusion_type=args.fusion,
         )
 
     elif args.experiment == "real12":
@@ -589,6 +667,13 @@ def save_json(path, obj):
 def main():
     parser = argparse.ArgumentParser(
         description="PTB-XL prior reconstruction ablation training"
+    )
+
+    parser.add_argument(
+        "--fusion",
+        type=str,
+        default="concat",
+        choices=["concat", "weighted", "gated"],
     )
 
     parser.add_argument("--data", type=str, required=True)
