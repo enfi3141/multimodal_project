@@ -4,14 +4,13 @@ import pandas as pd
 
 
 EXPERIMENT_NAMES = {
-    "raw1": "Baseline 1 (Raw 1-lead)",
-    "raw1_meta": "Raw 1-lead + Meta",
-    "recon12": "Baseline 2 (Reconstructed 12-lead)",
-    "recon12_meta": "Recon 12-lead + Meta",
-    "raw1_recon12": "Baseline 3 (Raw + Recon)",
-    "raw1_recon12_meta": "Ours (Raw + Recon + Meta)",
-    "real12": "Upper Bound (Real 12-lead)",
-    "real12_meta": "Upper Bound + Meta",
+    "recon12_meta_concat": "Recon 12-lead + Meta / Concat",
+    "recon12_meta_weighted": "Recon 12-lead + Meta / Weighted",
+    "recon12_meta_gated": "Recon 12-lead + Meta / Gated",
+
+    "raw1_recon12_meta_concat": "Raw + Recon + Meta / Concat",
+    "raw1_recon12_meta_weighted": "Raw + Recon + Meta / Weighted",
+    "raw1_recon12_meta_gated": "Raw + Recon + Meta / Gated",
 }
 
 
@@ -21,8 +20,7 @@ def load_metrics(path):
 
 
 def main():
-    # epoch 30 결과 폴더
-    base_dir = "checkpoint_ptbxl/prior_ablation_epoch30"
+    base_dir = "checkpoint_ptbxl/prior_fusion_epoch30"
 
     rows = []
 
@@ -49,27 +47,25 @@ def main():
     df = pd.DataFrame(rows)
 
     if df.empty:
-        print("\n[ERROR] No test_metrics.json files found.")
+        print("\n[ERROR] No fusion test_metrics.json files found.")
         print("Check base_dir:", base_dir)
         return
 
-    # 보기 좋게 반올림
     show_df = df.copy()
     for col in ["Accuracy", "F1-Score", "AUROC", "Sensitivity", "Specificity"]:
         show_df[col] = show_df[col].map(lambda x: round(float(x), 4))
 
-    print("\n=== Quantitative Results ===")
+    print("\n=== Fusion Results ===")
     print(show_df.to_string(index=False))
 
-    save_path = os.path.join(base_dir, "quantitative_results_summary.csv")
+    save_path = os.path.join(base_dir, "fusion_results_summary.csv")
     show_df.to_csv(save_path, index=False)
 
     print("\n[SAVE]", save_path)
 
-    # 지표별 최고 모델도 같이 출력
     metric_cols = ["Accuracy", "F1-Score", "AUROC", "Sensitivity", "Specificity"]
 
-    print("\n=== Best Method by Metric ===")
+    print("\n=== Best Fusion Method by Metric ===")
     for col in metric_cols:
         best_idx = show_df[col].idxmax()
         best_row = show_df.loc[best_idx]

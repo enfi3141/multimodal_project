@@ -204,11 +204,13 @@ class SingleECGClassifier(nn.Module):
         use_meta=False,
         meta_in_dim=3,
         meta_feature_dim=16,
+        fusion_type="concat",
     ):
         super().__init__()
 
         self.input_key = input_key
         self.use_meta = use_meta
+        self.fusion_type = fusion_type
 
         self.ecg_encoder = RawECGEncoder(
             in_channels=in_channels,
@@ -219,8 +221,6 @@ class SingleECGClassifier(nn.Module):
             base_channels=base_channels,
         )
 
-        fusion_dim = feature_dim
-
         if use_meta:
             self.meta_encoder = MetadataEncoder(
                 in_dim=meta_in_dim,
@@ -228,9 +228,32 @@ class SingleECGClassifier(nn.Module):
                 feature_dim=meta_feature_dim,
                 dropout=0.1,
             )
-            fusion_dim += meta_feature_dim
         else:
             self.meta_encoder = None
+
+        if not use_meta:
+            fusion_dim = feature_dim
+
+        elif fusion_type == "concat":
+            fusion_dim = feature_dim + meta_feature_dim
+
+        elif fusion_type == "weighted":
+            self.meta_proj = nn.Linear(meta_feature_dim, feature_dim)
+            self.branch_weights = nn.Parameter(torch.ones(2))
+            fusion_dim = feature_dim
+
+        elif fusion_type == "gated":
+            self.meta_proj = nn.Linear(meta_feature_dim, feature_dim)
+            self.gate = nn.Sequential(
+                nn.Linear(feature_dim + feature_dim, feature_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(feature_dim, feature_dim),
+                nn.Sigmoid(),
+            )
+            fusion_dim = feature_dim
+
+        else:
+            raise ValueError("Unknown fusion_type: {}".format(fusion_type))
 
         self.classifier = nn.Sequential(
             nn.Linear(fusion_dim, 128),
@@ -243,13 +266,29 @@ class SingleECGClassifier(nn.Module):
         x = batch[self.input_key]
         ecg_feat = self.ecg_encoder(x)
 
-        feats = [ecg_feat]
+        if not self.use_meta:
+            fused = ecg_feat
 
-        if self.use_meta:
+        else:
             meta_feat = self.meta_encoder(batch["metadata"])
-            feats.append(meta_feat)
 
-        fused = torch.cat(feats, dim=1)
+            if self.fusion_type == "concat":
+                fused = torch.cat([ecg_feat, meta_feat], dim=1)
+
+            elif self.fusion_type == "weighted":
+                meta_feat = self.meta_proj(meta_feat)
+                weights = torch.softmax(self.branch_weights, dim=0)
+                fused = weights[0] * ecg_feat + weights[1] * meta_feat
+
+            elif self.fusion_type == "gated":
+                meta_feat = self.meta_proj(meta_feat)
+                gate_input = torch.cat([ecg_feat, meta_feat], dim=1)
+                gate = self.gate(gate_input)
+                fused = gate * ecg_feat + (1.0 - gate) * meta_feat
+
+            else:
+                raise ValueError("Unknown fusion_type: {}".format(self.fusion_type))
+
         return self.classifier(fused)
 
 
@@ -726,7 +765,12 @@ def main():
 
     seed_everything(args.seed)
 
-    save_dir = os.path.join(args.checkpoint, args.experiment)
+    save_name = args.experiment
+
+    if args.experiment in ["recon12_meta", "raw1_recon12_meta"]:
+        save_name = "{}_{}".format(args.experiment, args.fusion)
+
+    save_dir = os.path.join(args.checkpoint, save_name)
     os.makedirs(save_dir, exist_ok=True)
 
     print("[INFO] Experiment:", args.experiment)
