@@ -83,10 +83,6 @@ class RawECGEncoder(nn.Module):
         self.layer2 = self._make_layer_1d(block, base_channels * 2, layers[1], stride=2)
         self.layer3 = self._make_layer_1d(block, base_channels * 4, layers[2], stride=2)
 
-        # Fix temporal length before LSTM.
-        # T=1000 gives about 63 steps after CNN, so we keep LSTM input length fixed at 63.
-        self.temporal_pool = nn.AdaptiveAvgPool1d(63)
-
         encoder_out_dim = base_channels * 4 * block.expansion
 
         self.lstm = nn.LSTM(
@@ -135,10 +131,6 @@ class RawECGEncoder(nn.Module):
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)      # (B, C_out, T')
-
-        # Make temporal length fixed before LSTM.
-        # 1000-length and 5000-length inputs both become 63 time steps here.
-        x = self.temporal_pool(x)   # (B, C_out, 63)
 
         # LSTM expects (B, T', C_out)
         x = x.transpose(1, 2)
