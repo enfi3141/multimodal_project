@@ -112,18 +112,18 @@ class PriorReconAblationDataset(data.Dataset):
         self.time_delta = z["time_delta"].astype(np.float32) if "time_delta" in z.files else None
         self.pairs = z["pairs"]
 
-        # 500Hz ECG length 5000 -> 100Hz-like length 1000
-        # 기존 downstream classifier가 1000 길이 ECG에서 검증되었기 때문에
-        # 500Hz reconstruction 결과를 진단 모델에 넣기 전 길이를 맞춘다.
-        if self.raw_1lead.shape[-1] == 5000:
-            self.raw_1lead = self.raw_1lead[:, :, ::5]
-            self.recon_12lead = self.recon_12lead[:, :, ::5]
-            self.real_12lead = self.real_12lead[:, :, ::5]
+        # # 500Hz ECG length 5000 -> 100Hz-like length 1000
+        # # 기존 downstream classifier가 1000 길이 ECG에서 검증되었기 때문에
+        # # 500Hz reconstruction 결과를 진단 모델에 넣기 전 길이를 맞춘다.
+        # if self.raw_1lead.shape[-1] == 5000:
+        #     self.raw_1lead = self.raw_1lead[:, :, ::5]
+        #     self.recon_12lead = self.recon_12lead[:, :, ::5]
+        #     self.real_12lead = self.real_12lead[:, :, ::5]
 
-            if self.past_12lead is not None:
-                self.past_12lead = self.past_12lead[:, :, ::5]
+        #     if self.past_12lead is not None:
+        #         self.past_12lead = self.past_12lead[:, :, ::5]
 
-            print("[INFO] Downsampled 500Hz signals to length:", self.raw_1lead.shape[-1])
+        #     print("[INFO] Downsampled 500Hz signals to length:", self.raw_1lead.shape[-1])
 
         if self.raw_1lead.ndim != 3 or self.raw_1lead.shape[1] != 1:
             raise ValueError("inputs must have shape (N, 1, T), got {}".format(self.raw_1lead.shape))
