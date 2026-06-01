@@ -4,10 +4,12 @@ import torch.nn as nn
 
 class MetadataEncoder(nn.Module):
     """
-    Input:  (B, 3)  -> [age_norm, sex_onehot(2)]
+    Input:  (B, in_dim)
+            Default metadata:
+            [age_norm, sex, height_norm, weight_norm, height_missing, weight_missing]
     Output: (B, feature_dim)
     """
-    def __init__(self, in_dim=3, hidden_dim=32, feature_dim=16, dropout=0.1):
+    def __init__(self, in_dim=6, hidden_dim=32, feature_dim=16, dropout=0.1):
         super().__init__()
 
         self.net = nn.Sequential(
@@ -24,7 +26,7 @@ class MetadataEncoder(nn.Module):
 
 
 class MetadataClassifier(nn.Module):
-    def __init__(self, num_classes=5, in_dim=3, hidden_dim=32, feature_dim=16):
+    def __init__(self, num_classes=5, in_dim=6, hidden_dim=32, feature_dim=16):
         super().__init__()
         self.encoder = MetadataEncoder(
             in_dim=in_dim,
@@ -39,5 +41,5 @@ class MetadataClassifier(nn.Module):
         return out
 
 
-def metadata_mlp(num_classes=5):
-    return MetadataClassifier(num_classes=num_classes)
+def metadata_mlp(num_classes=5, in_dim=6):
+    return MetadataClassifier(num_classes=num_classes, in_dim=in_dim)

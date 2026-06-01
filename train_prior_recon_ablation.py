@@ -129,7 +129,21 @@ class PriorReconAblationDataset(data.Dataset):
         df = pd.read_csv(db_path)
         scp_statements = pd.read_csv(scp_path, index_col=0)
 
-        df = df.set_index("filename_lr")
+        
+        lr_set = set(df["filename_lr"].astype(str))
+        hr_set = set(df["filename_hr"].astype(str))
+
+        if self.current_paths[0] in lr_set:
+            df = df.set_index("filename_lr")
+            print("[INFO] Matched current paths with filename_lr")
+        elif self.current_paths[0] in hr_set:
+            df = df.set_index("filename_hr")
+            print("[INFO] Matched current paths with filename_hr")
+        else:
+            raise ValueError(
+                "Current paths are not matched with filename_lr or filename_hr. "
+                "Example: {}".format(self.current_paths[0])
+            )
 
         missing = [p for p in self.current_paths if p not in df.index]
         if len(missing) > 0:
@@ -147,16 +161,32 @@ class PriorReconAblationDataset(data.Dataset):
             label = build_label_from_scp_codes(row["scp_codes"], scp_statements)
             labels.append(label)
 
-            age = safe_float(row["age"], default=0.0)
+            age = safe_float(row["age"], default=60.0)
             age_norm = age / 100.0
 
-            sex = safe_float(row["sex"], default=-1.0)
+            sex = safe_float(row["sex"], default=0.0)
+            sex_value = 1.0 if sex == 1.0 else 0.0
 
-            # PTB-XL sex coding을 이름으로 단정하지 않고, 0/1 one-hot만 사용
-            sex_0 = 1.0 if sex == 0.0 else 0.0
-            sex_1 = 1.0 if sex == 1.0 else 0.0
+            height_raw = row["height"] if "height" in row.index else np.nan
+            weight_raw = row["weight"] if "weight" in row.index else np.nan
 
-            meta = [age_norm, sex_0, sex_1]
+            height_missing = 1.0 if pd.isna(height_raw) else 0.0
+            weight_missing = 1.0 if pd.isna(weight_raw) else 0.0
+
+            height = safe_float(height_raw, default=170.0)
+            weight = safe_float(weight_raw, default=75.0)
+
+            height_norm = height / 200.0
+            weight_norm = weight / 150.0
+
+            meta = [
+                age_norm,
+                sex_value,
+                height_norm,
+                weight_norm,
+                height_missing,
+                weight_missing,
+            ]
 
             if use_time_delta and self.time_delta is not None:
                 td = float(self.time_delta[len(metadata), 0])
