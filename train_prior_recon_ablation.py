@@ -112,22 +112,24 @@ class PriorReconAblationDataset(data.Dataset):
         self.time_delta = z["time_delta"].astype(np.float32) if "time_delta" in z.files else None
         self.pairs = z["pairs"]
 
-        def downsample_500_to_100(x):
-            n, c, t = x.shape
-            if t != 5000:
-                return x
-            return x.reshape(n, c, 1000, 5).mean(axis=-1).astype(np.float32)
+        def crop_to_1000(x):
+            # x: (N, C, T)
+            # For 500Hz signals with length 5000, use the first 1000 samples.
+            # For 100Hz signals already with length 1000, keep unchanged.
+            if x.shape[-1] > 1000:
+                return x[:, :, :1000].astype(np.float32)
+            return x
 
 
-        if self.raw_1lead.shape[-1] == 5000:
-            self.raw_1lead = downsample_500_to_100(self.raw_1lead)
-            self.recon_12lead = downsample_500_to_100(self.recon_12lead)
-            self.real_12lead = downsample_500_to_100(self.real_12lead)
+        if self.raw_1lead.shape[-1] > 1000:
+            self.raw_1lead = crop_to_1000(self.raw_1lead)
+            self.recon_12lead = crop_to_1000(self.recon_12lead)
+            self.real_12lead = crop_to_1000(self.real_12lead)
 
             if self.past_12lead is not None:
-                self.past_12lead = downsample_500_to_100(self.past_12lead)
+                self.past_12lead = crop_to_1000(self.past_12lead)
 
-            print("[INFO] Average-pooled 500Hz signals to length:", self.raw_1lead.shape[-1])
+            print("[INFO] Cropped signals to length:", self.raw_1lead.shape[-1])
 
         if self.raw_1lead.ndim != 3 or self.raw_1lead.shape[1] != 1:
             raise ValueError("inputs must have shape (N, 1, T), got {}".format(self.raw_1lead.shape))
