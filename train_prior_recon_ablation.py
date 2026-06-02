@@ -184,34 +184,26 @@ class PriorReconAblationDataset(data.Dataset):
             age_norm = age / 100.0
 
             sex = safe_float(row["sex"], default=0.0)
-            sex_value = 1.0 if sex == 1.0 else 0.0
 
-            height_raw = row["height"] if "height" in row.index else np.nan
-            weight_raw = row["weight"] if "weight" in row.index else np.nan
-
-            height_missing = 1.0 if pd.isna(height_raw) else 0.0
-            weight_missing = 1.0 if pd.isna(weight_raw) else 0.0
-
-            height = safe_float(height_raw, default=170.0)
-            weight = safe_float(weight_raw, default=75.0)
-
-            height_norm = height / 200.0
-            weight_norm = weight / 150.0
+            if sex == 1.0:
+                sex_male = 1.0
+                sex_female = 0.0
+            else:
+                sex_male = 0.0
+                sex_female = 1.0
 
             meta = [
                 age_norm,
-                sex_value,
-                height_norm,
-                weight_norm,
-                height_missing,
-                weight_missing,
+                sex_male,
+                sex_female,
             ]
 
             if use_time_delta and self.time_delta is not None:
                 td = float(self.time_delta[len(metadata), 0])
-                meta.append(td)
+            else:
+                td = 0.0
 
-            metadata.append(meta)
+            meta.append(td)
 
         self.labels = np.stack(labels).astype(np.float32)
         self.metadata = np.asarray(metadata, dtype=np.float32)
