@@ -192,18 +192,19 @@ class PriorReconAblationDataset(data.Dataset):
                 sex_male = 0.0
                 sex_female = 1.0
 
-            meta = [
-                age_norm,
-                sex_male,
-                sex_female,
-            ]
-
             if use_time_delta and self.time_delta is not None:
                 td = float(self.time_delta[len(metadata), 0])
             else:
                 td = 0.0
 
-            meta.append(td)
+            meta = [
+                age_norm,
+                sex_male,
+                sex_female,
+                td,
+            ]
+
+            metadata.append(meta)
 
         self.labels = np.stack(labels).astype(np.float32)
         self.metadata = np.asarray(metadata, dtype=np.float32)
