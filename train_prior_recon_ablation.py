@@ -112,24 +112,30 @@ class PriorReconAblationDataset(data.Dataset):
         self.time_delta = z["time_delta"].astype(np.float32) if "time_delta" in z.files else None
         self.pairs = z["pairs"]
 
-        # def crop_to_1000(x):
-        #     # x: (N, C, T)
-        #     # For 500Hz signals with length 5000, use the first 1000 samples.
-        #     # For 100Hz signals already with length 1000, keep unchanged.
-        #     if x.shape[-1] > 1000:
-        #         return x[:, :, :1000].astype(np.float32)
-        #     return x
+        def crop_to_length(x, target_len=2000):
+            # x: (N, C, T)
+            t = x.shape[-1]
+
+            if t <= target_len:
+                return x.astype(np.float32)
+
+            start = (t - target_len) // 2
+            end = start + target_len
+
+            return x[:, :, start:end].astype(np.float32)
 
 
-        # if self.raw_1lead.shape[-1] > 1000:
-        #     self.raw_1lead = crop_to_1000(self.raw_1lead)
-        #     self.recon_12lead = crop_to_1000(self.recon_12lead)
-        #     self.real_12lead = crop_to_1000(self.real_12lead)
+        if self.raw_1lead.shape[-1] > 2000:
+            self.raw_1lead = crop_to_length(self.raw_1lead, target_len=2000)
+            self.recon_12lead = crop_to_length(self.recon_12lead, target_len=2000)
+            self.real_12lead = crop_to_length(self.real_12lead, target_len=2000)
 
-        #     if self.past_12lead is not None:
-        #         self.past_12lead = crop_to_1000(self.past_12lead)
+            if self.past_12lead is not None:
+                self.past_12lead = crop_to_length(self.past_12lead, target_len=2000)
 
-        #     print("[INFO] Cropped signals to length:", self.raw_1lead.shape[-1])
+            print("[INFO] Center-cropped signals to length:", self.raw_1lead.shape[-1])
+        else:
+            print("[INFO] Signal length:", self.raw_1lead.shape[-1])
 
         if self.raw_1lead.ndim != 3 or self.raw_1lead.shape[1] != 1:
             raise ValueError("inputs must have shape (N, 1, T), got {}".format(self.raw_1lead.shape))
