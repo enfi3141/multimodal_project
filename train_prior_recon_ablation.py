@@ -112,24 +112,24 @@ class PriorReconAblationDataset(data.Dataset):
         self.time_delta = z["time_delta"].astype(np.float32) if "time_delta" in z.files else None
         self.pairs = z["pairs"]
 
-        def crop_to_1000(x):
-            # x: (N, C, T)
-            # For 500Hz signals with length 5000, use the first 1000 samples.
-            # For 100Hz signals already with length 1000, keep unchanged.
-            if x.shape[-1] > 1000:
-                return x[:, :, :1000].astype(np.float32)
-            return x
+        # def crop_to_1000(x):
+        #     # x: (N, C, T)
+        #     # For 500Hz signals with length 5000, use the first 1000 samples.
+        #     # For 100Hz signals already with length 1000, keep unchanged.
+        #     if x.shape[-1] > 1000:
+        #         return x[:, :, :1000].astype(np.float32)
+        #     return x
 
 
-        if self.raw_1lead.shape[-1] > 1000:
-            self.raw_1lead = crop_to_1000(self.raw_1lead)
-            self.recon_12lead = crop_to_1000(self.recon_12lead)
-            self.real_12lead = crop_to_1000(self.real_12lead)
+        # if self.raw_1lead.shape[-1] > 1000:
+        #     self.raw_1lead = crop_to_1000(self.raw_1lead)
+        #     self.recon_12lead = crop_to_1000(self.recon_12lead)
+        #     self.real_12lead = crop_to_1000(self.real_12lead)
 
-            if self.past_12lead is not None:
-                self.past_12lead = crop_to_1000(self.past_12lead)
+        #     if self.past_12lead is not None:
+        #         self.past_12lead = crop_to_1000(self.past_12lead)
 
-            print("[INFO] Cropped signals to length:", self.raw_1lead.shape[-1])
+        #     print("[INFO] Cropped signals to length:", self.raw_1lead.shape[-1])
 
         if self.raw_1lead.ndim != 3 or self.raw_1lead.shape[1] != 1:
             raise ValueError("inputs must have shape (N, 1, T), got {}".format(self.raw_1lead.shape))
@@ -497,6 +497,7 @@ def build_model(args, meta_in_dim):
             num_classes=args.num_classes,
             use_meta=True,
             meta_in_dim=meta_in_dim,
+            fusion_type=args.fusion,
         )
 
     elif args.experiment == "recon12":
@@ -550,6 +551,7 @@ def build_model(args, meta_in_dim):
             num_classes=args.num_classes,
             use_meta=True,
             meta_in_dim=meta_in_dim,
+            fusion_type=args.fusion,
         )
 
     else:
@@ -677,6 +679,59 @@ def compute_metrics(y_true, y_prob, threshold=0.5):
         per_label_auc,
         per_label_detail,
     )
+
+def find_best_thresholds(y_true, y_prob):
+    """
+    Find class-wise thresholds on validation set by maximizing per-class F1.
+    These thresholds should be selected only on validation data,
+    then applied to test data.
+    """
+    thresholds = []
+    grid = np.arange(0.05, 0.51, 0.01)
+
+    for i in range(y_true.shape[1]):
+        best_th = 0.5
+        best_f1 = -1.0
+
+        for th in grid:
+            y_pred_i = (y_prob[:, i] >= th).astype(np.float32)
+            f1 = f1_score(
+                y_true[:, i],
+                y_pred_i,
+                average="binary",
+                zero_division=0,
+            )
+
+            if f1 > best_f1:
+                best_f1 = f1
+                best_th = th
+
+        thresholds.append(best_th)
+
+    return np.asarray(thresholds, dtype=np.float32)
+
+
+@torch.no_grad()
+def predict_probs(loader, model, device):
+    model.eval()
+
+    all_targets = []
+    all_probs = []
+
+    for batch in tqdm(loader, leave=False):
+        batch = move_batch_to_device(batch, device)
+
+        targets = batch["label"].float()
+        outputs = model(batch)
+        probs = torch.sigmoid(outputs)
+
+        all_targets.append(targets.detach().cpu().numpy())
+        all_probs.append(probs.detach().cpu().numpy())
+
+    y_true = np.concatenate(all_targets, axis=0)
+    y_prob = np.concatenate(all_probs, axis=0)
+
+    return y_true, y_prob
 
 
 def train_one_epoch(loader, model, criterion, optimizer, device):
@@ -809,7 +864,7 @@ def main():
 
     save_name = args.experiment
 
-    if args.experiment in ["recon12_meta", "raw1_recon12_meta"]:
+    if args.experiment in ["raw1_meta", "recon12_meta", "raw1_recon12", "raw1_recon12_meta", "real12_meta"]:
         save_name = "{}_{}".format(args.experiment, args.fusion)
 
     save_dir = os.path.join(args.checkpoint, save_name)
@@ -922,8 +977,33 @@ def main():
         checkpoint = torch.load(ckpt_path, map_location=device)
         model.load_state_dict(checkpoint["model_state_dict"])
 
+    # 1) Find class-wise thresholds on validation set
+    val_y_true, val_y_prob = predict_probs(valloader, model, device)
+    best_thresholds = find_best_thresholds(val_y_true, val_y_prob)
+
+    print(
+        "[BEST THRESHOLDS] "
+        + " | ".join(
+            ["{}={:.2f}".format(name, th) for name, th in zip(LABEL_NAMES, best_thresholds)]
+        )
+    )
+
+    # 2) Keep loss from normal evaluation if needed
     (
         test_loss,
+        _test_f1_05,
+        _test_auc_05,
+        _test_acc_05,
+        _test_sens_05,
+        _test_spec_05,
+        _test_per_label_auc_05,
+        _test_per_label_detail_05,
+    ) = evaluate(testloader, model, criterion, device)
+
+    # 3) Recompute test metrics using validation-selected thresholds
+    test_y_true, test_y_prob = predict_probs(testloader, model, device)
+
+    (
         test_f1,
         test_auc,
         test_acc,
@@ -931,7 +1011,11 @@ def main():
         test_spec,
         test_per_label_auc,
         test_per_label_detail,
-    ) = evaluate(testloader, model, criterion, device)
+    ) = compute_metrics(
+        test_y_true,
+        test_y_prob,
+        threshold=best_thresholds,
+    )
 
     test_metrics = {
         "test_loss": float(test_loss),
@@ -942,6 +1026,10 @@ def main():
         "test_specificity": float(test_spec),
         "test_per_label_auc": test_per_label_auc,
         "test_per_label_detail": test_per_label_detail,
+        "best_thresholds": {
+            name: float(th)
+            for name, th in zip(LABEL_NAMES, best_thresholds)
+        },
         "best_epoch": int(best_epoch),
         "best_val_macro_auc": float(best_auc),
         "label_names": LABEL_NAMES,
