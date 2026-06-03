@@ -112,28 +112,26 @@ class PriorReconAblationDataset(data.Dataset):
         self.time_delta = z["time_delta"].astype(np.float32) if "time_delta" in z.files else None
         self.pairs = z["pairs"]
 
-        def crop_to_length(x, target_len=2000):
+        def downsample_500_to_100(x):
             # x: (N, C, T)
-            t = x.shape[-1]
+            # 500Hz 10s signal: T=5000
+            # Convert to length 1000 by average pooling over every 5 samples.
+            if x.shape[-1] == 5000:
+                n, c, t = x.shape
+                return x.reshape(n, c, 1000, 5).mean(axis=-1).astype(np.float32)
 
-            if t <= target_len:
-                return x.astype(np.float32)
-
-            start = (t - target_len) // 2
-            end = start + target_len
-
-            return x[:, :, start:end].astype(np.float32)
+            return x.astype(np.float32)
 
 
-        if self.raw_1lead.shape[-1] > 2000:
-            self.raw_1lead = crop_to_length(self.raw_1lead, target_len=2000)
-            self.recon_12lead = crop_to_length(self.recon_12lead, target_len=2000)
-            self.real_12lead = crop_to_length(self.real_12lead, target_len=2000)
+        if self.raw_1lead.shape[-1] == 5000:
+            self.raw_1lead = downsample_500_to_100(self.raw_1lead)
+            self.recon_12lead = downsample_500_to_100(self.recon_12lead)
+            self.real_12lead = downsample_500_to_100(self.real_12lead)
 
             if self.past_12lead is not None:
-                self.past_12lead = crop_to_length(self.past_12lead, target_len=2000)
+                self.past_12lead = downsample_500_to_100(self.past_12lead)
 
-            print("[INFO] Center-cropped signals to length:", self.raw_1lead.shape[-1])
+            print("[INFO] Average-pooled 500Hz signals to length:", self.raw_1lead.shape[-1])
         else:
             print("[INFO] Signal length:", self.raw_1lead.shape[-1])
 
