@@ -91,9 +91,7 @@ def make_npz(
                 print("[SKIP] too short:", current_path, ecg12.shape)
                 continue
 
-            start = (t - crop_len) // 2
-            end = start + crop_len
-            ecg12 = ecg12[:, start:end]
+            ecg12 = ecg12[:, :crop_len]
 
         if ecg12.shape[0] != 12:
             print("[SKIP] invalid lead shape:", current_path, ecg12.shape)
