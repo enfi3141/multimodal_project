@@ -1203,11 +1203,26 @@ def main():
     print("[INFO] Device:", device)
     print("[INFO] Save dir:", save_dir)
 
-    trainloader, train_ds = build_loader(args, "train")
-    valloader, val_ds = build_loader(args, "val")
-    testloader, test_ds = build_loader(args, "test")
+    # In eval-only mode without threshold optimization, only the test set is needed.
+    # This avoids unnecessarily loading train/val NPZ files and rebuilding WFDB signals.
+    if args.epochs == 0 and not args.optimize_threshold:
+        print("[INFO] Eval-only without threshold optimization: loading test set only.")
 
-    meta_in_dim = train_ds.metadata.shape[1]
+        testloader, test_ds = build_loader(args, "test")
+
+        trainloader = None
+        valloader = None
+        train_ds = test_ds
+        val_ds = None
+
+        meta_in_dim = test_ds.metadata.shape[1]
+
+    else:
+        trainloader, train_ds = build_loader(args, "train")
+        valloader, val_ds = build_loader(args, "val")
+        testloader, test_ds = build_loader(args, "test")
+
+        meta_in_dim = train_ds.metadata.shape[1]
 
     model = build_model(args, meta_in_dim=meta_in_dim)
     model = model.to(device)
