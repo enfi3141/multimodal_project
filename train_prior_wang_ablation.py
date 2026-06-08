@@ -111,12 +111,14 @@ class PriorReconAblationDataset(data.Dataset):
         npz_path,
         data_dir,
         use_time_delta=False,
+        rebuild_real_from_wfdb=False,
     ):
         super().__init__()
 
         self.npz_path = npz_path
         self.data_dir = data_dir
         self.use_time_delta = use_time_delta
+        self.rebuild_real_from_wfdb = rebuild_real_from_wfdb
 
         z = np.load(npz_path, allow_pickle=True)
 
@@ -272,7 +274,7 @@ class PriorReconAblationDataset(data.Dataset):
             after = len(self.current_paths)
             print("[INFO] Removed samples without diagnostic labels: {} -> {}".format(before, after))
 
-        if len(self.current_paths) > 0 and self.current_paths[0] in hr_set:
+        if self.rebuild_real_from_wfdb and len(self.current_paths) > 0 and self.current_paths[0] in hr_set:
             self.real_12lead = np.stack(
                 [load_wfdb_12lead_first1000(p) for p in self.current_paths],
                 axis=0,
@@ -830,10 +832,17 @@ def build_loader(args, split):
     else:
         raise ValueError("Unknown split: {}".format(split))
 
+    rebuild_real_from_wfdb = args.experiment in [
+        "real12",
+        "real12_meta",
+        "real12_meta_logit",
+    ]
+
     dataset = PriorReconAblationDataset(
         npz_path=npz_path,
         data_dir=args.data,
         use_time_delta=args.use_time_delta,
+        rebuild_real_from_wfdb=rebuild_real_from_wfdb,
     )
 
     loader = data.DataLoader(
