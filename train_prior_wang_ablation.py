@@ -1394,9 +1394,14 @@ def main():
 
             if hasattr(target_model, "head_feat") and hasattr(target_model, "head_cls"):
                 for name, p in target_model.named_parameters():
-                    if name.startswith(("stem", "layer1", "layer2", "layer3", "head_feat")):
+                    # freeze only early Wang layers
+                    if name.startswith(("stem", "layer1", "layer2")):
                         p.requires_grad = False
-                print("[INFO] Frozen Wang feature backbone/head parameters.")
+                    else:
+                        p.requires_grad = True
+
+                print("[INFO] Frozen early Wang layers: stem/layer1/layer2")
+                print("[INFO] Trainable: layer3/head_feat/head_cls/meta_encoder/meta_proj/gate")
 
             if hasattr(target_model, "ecg_encoder") and hasattr(target_model.ecg_encoder, "backbone"):
                 for p in target_model.ecg_encoder.backbone.parameters():
