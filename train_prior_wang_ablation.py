@@ -444,6 +444,31 @@ class WangLogitMetaClassifier(nn.Module):
         else:
             raise ValueError("Unknown fusion_type: {}".format(self.fusion_type))
 
+class WangDirectClassifier(nn.Module):
+    """
+    Direct use of the full pretrained Wang classifier.
+
+    ECG branch:
+      ResNet1dWang(x) -> logits (B, 5)
+
+    Used for recon12 / real12 when reproducing the pretrained
+    Wang classifier output without adding a new classification head.
+    """
+
+    def __init__(
+        self,
+        input_key,
+        in_channels=12,
+        num_classes=5,
+    ):
+        super().__init__()
+        self.input_key = input_key
+        self.wang = ResNet1dWang(n_leads=in_channels, n_classes=num_classes)
+
+    def forward(self, batch):
+        x = batch[self.input_key]
+        return self.wang(x)
+
 class RawReconClassifier(nn.Module):
     def __init__(
         self,
@@ -629,12 +654,10 @@ def build_model(args, meta_in_dim):
         )
 
     elif args.experiment == "recon12":
-        return SingleECGClassifier(
+        return WangDirectClassifier(
             input_key="recon_12lead",
             in_channels=12,
             num_classes=args.num_classes,
-            use_meta=False,
-            meta_in_dim=meta_in_dim,
         )
     
     elif args.experiment == "recon12_meta":
@@ -664,12 +687,10 @@ def build_model(args, meta_in_dim):
         )
 
     elif args.experiment == "real12":
-        return SingleECGClassifier(
+        return WangDirectClassifier(
             input_key="real_12lead",
             in_channels=12,
             num_classes=args.num_classes,
-            use_meta=False,
-            meta_in_dim=meta_in_dim,
         )
 
     elif args.experiment == "real12_meta":
@@ -1144,15 +1165,114 @@ def main():
                 print("[INFO] Frozen full Wang classifier parameters.")
 
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(
-        model.parameters(),
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-    )
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+
+    optimizer = None
+    if len(trainable_params) > 0:
+        optimizer = optim.Adam(
+            trainable_params,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+        )
+    else:
+        print("[INFO] No trainable parameters. Running eval-only.")
 
     best_auc = -1.0
     best_epoch = -1
     history = []
+
+    if optimizer is None or args.epochs == 0:
+        print("[INFO] Eval-only mode.")
+
+        threshold = 0.5
+        threshold_detail = None
+
+        if args.optimize_threshold:
+            val_loss_for_th, y_val_true, y_val_prob = collect_probs(
+                valloader, model, criterion, device
+            )
+            threshold, threshold_detail = find_optimal_thresholds(
+                y_val_true,
+                y_val_prob,
+                metric=args.threshold_metric,
+            )
+
+            save_json(
+                os.path.join(save_dir, "thresholds.json"),
+                {
+                    "threshold_metric": args.threshold_metric,
+                    "label_names": LABEL_NAMES,
+                    "thresholds": {
+                        name: float(threshold[i])
+                        for i, name in enumerate(LABEL_NAMES)
+                    },
+                    "detail": threshold_detail,
+                    "val_loss_for_threshold_search": float(val_loss_for_th),
+                },
+            )
+
+            print("[THRESHOLD] metric={}".format(args.threshold_metric))
+            print(
+                "  " + " | ".join(
+                    [
+                        "{}={:.2f}".format(name, threshold[i])
+                        for i, name in enumerate(LABEL_NAMES)
+                    ]
+                )
+            )
+
+        (
+            test_loss,
+            test_f1,
+            test_auc,
+            test_acc,
+            test_sens,
+            test_spec,
+            test_per_label_auc,
+            test_per_label_detail,
+        ) = evaluate(testloader, model, criterion, device, threshold=threshold)
+
+        test_metrics = {
+            "test_loss": float(test_loss),
+            "test_accuracy": float(test_acc),
+            "test_macro_f1": float(test_f1),
+            "test_macro_auc": float(test_auc),
+            "test_sensitivity": float(test_sens),
+            "test_specificity": float(test_spec),
+            "test_per_label_auc": test_per_label_auc,
+            "test_per_label_detail": test_per_label_detail,
+            "best_epoch": 0,
+            "best_val_macro_auc": float("nan"),
+            "label_names": LABEL_NAMES,
+            "optimize_threshold": bool(args.optimize_threshold),
+            "threshold_metric": args.threshold_metric if args.optimize_threshold else None,
+            "thresholds": (
+                {name: float(threshold[i]) for i, name in enumerate(LABEL_NAMES)}
+                if args.optimize_threshold else 0.5
+            ),
+            "threshold_detail": threshold_detail,
+        }
+
+        save_json(os.path.join(save_dir, "test_metrics.json"), test_metrics)
+
+        print(
+            "[TEST] loss={:.4f} acc={:.4f} macro_f1={:.4f} macro_auc={:.4f} "
+            "sens={:.4f} spec={:.4f}".format(
+                test_loss,
+                test_acc,
+                test_f1,
+                test_auc,
+                test_sens,
+                test_spec,
+            )
+        )
+        print(
+            "  " + " | ".join(
+                ["{}={:.4f}".format(k, v) for k, v in test_per_label_auc.items()]
+            )
+        )
+
+        return
 
     for epoch in range(args.epochs):
         train_loss = train_one_epoch(
