@@ -104,7 +104,7 @@ class PriorReconAblationDataset(data.Dataset):
         self.data_dir = data_dir
         self.use_time_delta = use_time_delta
 
-        z = np.load(npz_path)
+        z = np.load(npz_path, allow_pickle=True)
 
         self.raw_1lead = z["inputs"].astype(np.float32)
         self.recon_12lead = z["preds"].astype(np.float32)
