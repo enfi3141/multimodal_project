@@ -569,6 +569,61 @@ def build_model(args, meta_in_dim):
 
     else:
         raise ValueError("Unknown experiment: {}".format(args.experiment))
+    
+
+def strip_module_prefix(state_dict):
+    new_state = {}
+    for k, v in state_dict.items():
+        if k.startswith("module."):
+            k = k[len("module."):]
+        new_state[k] = v
+    return new_state
+
+
+def load_pretrained_wang(model, ckpt_path, device):
+    """
+    Load pretrained ResNet1dWang weights into SingleECGClassifier's Wang backbone.
+
+    Expected target:
+      model.ecg_encoder.backbone
+    or if DataParallel:
+      model.module.ecg_encoder.backbone
+
+    The checkpoint may be:
+      1) pure state_dict
+      2) {"state_dict": ...}
+      3) {"model_state_dict": ...}
+    """
+
+    print("[INFO] Loading pretrained Wang checkpoint:", ckpt_path)
+
+    ckpt = torch.load(ckpt_path, map_location=device)
+
+    if isinstance(ckpt, dict) and "state_dict" in ckpt:
+        state = ckpt["state_dict"]
+    elif isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+        state = ckpt["model_state_dict"]
+    else:
+        state = ckpt
+
+    state = strip_module_prefix(state)
+
+    target_model = model.module if isinstance(model, torch.nn.DataParallel) else model
+
+    if not hasattr(target_model, "ecg_encoder"):
+        raise ValueError("This experiment does not have ecg_encoder. Cannot load Wang checkpoint.")
+
+    if not hasattr(target_model.ecg_encoder, "backbone"):
+        raise ValueError("ecg_encoder does not have backbone. Cannot load Wang checkpoint.")
+
+    missing, unexpected = target_model.ecg_encoder.backbone.load_state_dict(
+        state,
+        strict=False,
+    )
+
+    print("[INFO] Loaded pretrained Wang checkpoint.")
+    print("[INFO] Missing keys:", missing)
+    print("[INFO] Unexpected keys:", unexpected)
 
 
 def build_loader(args, split):
@@ -866,6 +921,18 @@ def main():
         default="concat",
         choices=["concat", "weighted", "gated"],
     )
+    parser.add_argument(
+        "--pretrained_wang",
+        type=str,
+        default=None,
+        help="Path to pretrained ResNet1dWang checkpoint, e.g., resnet1d_wang_best.pt",
+    )
+
+    parser.add_argument(
+        "--freeze_wang",
+        action="store_true",
+        help="Freeze pretrained Wang ECG encoder after loading.",
+    )
 
     parser.add_argument("--data", type=str, required=True)
 
@@ -943,6 +1010,15 @@ def main():
 
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
+
+    if args.pretrained_wang is not None:
+        load_pretrained_wang(model, args.pretrained_wang, device)
+
+        if args.freeze_wang:
+            target_model = model.module if isinstance(model, torch.nn.DataParallel) else model
+            for p in target_model.ecg_encoder.backbone.parameters():
+                p.requires_grad = False
+            print("[INFO] Frozen Wang backbone parameters.")
 
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(
