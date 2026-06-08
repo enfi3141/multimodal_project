@@ -513,6 +513,94 @@ class WangLogitMetaClassifier(nn.Module):
         else:
             raise ValueError("Unknown fusion_type: {}".format(self.fusion_type))
 
+class WangFeatureGatedMetaClassifier(nn.Module):
+    """
+    Feature-level gated fusion using pretrained Wang feature space.
+
+    ECG branch:
+      ResNet1dWang backbone + head[0:5] -> h_ecg (B, 128)
+
+    Metadata branch:
+      MetadataEncoder -> meta_feat (B, 16)
+      Linear(16 -> 128) -> h_meta (B, 128)
+
+    Gate:
+      g = sigmoid(MLP([h_ecg; h_meta]))  # (B, 128)
+      h_fused = g * h_ecg + (1 - g) * h_meta
+
+    Classifier:
+      Wang head[5:] -> logits (B, 5)
+    """
+
+    def __init__(
+        self,
+        input_key,
+        in_channels=12,
+        num_classes=5,
+        meta_in_dim=3,
+        meta_feature_dim=16,
+        feature_dim=128,
+    ):
+        super().__init__()
+
+        self.input_key = input_key
+        self.feature_dim = feature_dim
+
+        base = ResNet1dWang(n_leads=in_channels, n_classes=num_classes)
+
+        self.stem = base.stem
+        self.layer1 = base.layer1
+        self.layer2 = base.layer2
+        self.layer3 = base.layer3
+
+        head_layers = list(base.head.children())
+
+        # [0] AdaptiveConcatPool, [1] BN(256), [2] Dropout,
+        # [3] Linear(256->128), [4] ReLU
+        self.head_feat = nn.Sequential(*head_layers[:5])
+
+        # [5] BN(128), [6] Dropout, [7] Linear(128->5)
+        self.head_cls = nn.Sequential(*head_layers[5:])
+
+        self.meta_encoder = MetadataEncoder(
+            in_dim=meta_in_dim,
+            hidden_dim=32,
+            feature_dim=meta_feature_dim,
+            dropout=0.1,
+        )
+
+        self.meta_proj = nn.Linear(meta_feature_dim, feature_dim)
+
+        self.gate = nn.Sequential(
+            nn.Linear(feature_dim * 2, feature_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(feature_dim, feature_dim),
+            nn.Sigmoid(),
+        )
+
+    def extract_ecg_feat(self, x):
+        x = self.stem(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.head_feat(x)
+        return x
+
+    def forward(self, batch):
+        x = batch[self.input_key]
+
+        h_ecg = self.extract_ecg_feat(x)                  # (B, 128)
+        meta_feat = self.meta_encoder(batch["metadata"])  # (B, 16)
+        h_meta = self.meta_proj(meta_feat)                # (B, 128)
+
+        gate_input = torch.cat([h_ecg, h_meta], dim=1)
+        gate = self.gate(gate_input)                      # (B, 128)
+
+        h_fused = gate * h_ecg + (1.0 - gate) * h_meta
+        logits = self.head_cls(h_fused)
+
+        return logits
+
 class WangDirectClassifier(nn.Module):
     """
     Direct use of the full pretrained Wang classifier.
@@ -694,6 +782,22 @@ def build_model(args, meta_in_dim):
             meta_in_dim=meta_in_dim,
         )
     
+    elif args.experiment == "recon12_meta_feature_gate":
+        return WangFeatureGatedMetaClassifier(
+            input_key="recon_12lead",
+            in_channels=12,
+            num_classes=args.num_classes,
+            meta_in_dim=meta_in_dim,
+        )
+
+    elif args.experiment == "real12_meta_feature_gate":
+        return WangFeatureGatedMetaClassifier(
+            input_key="real_12lead",
+            in_channels=12,
+            num_classes=args.num_classes,
+            meta_in_dim=meta_in_dim,
+        )
+    
     elif args.experiment == "recon12_meta_logit":
         return WangLogitMetaClassifier(
             input_key="recon_12lead",
@@ -801,6 +905,44 @@ def load_pretrained_wang(model, ckpt_path, device):
 
     target_model = model.module if isinstance(model, torch.nn.DataParallel) else model
 
+    if hasattr(target_model, "head_feat") and hasattr(target_model, "head_cls"):
+        print("[INFO] Loading into feature-level Wang gated model")
+
+        mapped_state = {}
+
+        for k, v in state.items():
+            # backbone keys are same
+            if k.startswith(("stem.", "layer1.", "layer2.", "layer3.")):
+                mapped_state[k] = v
+
+            # original Wang head -> split head
+            elif k.startswith("head.0."):
+                mapped_state[k.replace("head.0.", "head_feat.0.")] = v
+            elif k.startswith("head.1."):
+                mapped_state[k.replace("head.1.", "head_feat.1.")] = v
+            elif k.startswith("head.2."):
+                mapped_state[k.replace("head.2.", "head_feat.2.")] = v
+            elif k.startswith("head.3."):
+                mapped_state[k.replace("head.3.", "head_feat.3.")] = v
+            elif k.startswith("head.4."):
+                mapped_state[k.replace("head.4.", "head_feat.4.")] = v
+            elif k.startswith("head.5."):
+                mapped_state[k.replace("head.5.", "head_cls.0.")] = v
+            elif k.startswith("head.6."):
+                mapped_state[k.replace("head.6.", "head_cls.1.")] = v
+            elif k.startswith("head.7."):
+                mapped_state[k.replace("head.7.", "head_cls.2.")] = v
+
+        missing, unexpected = target_model.load_state_dict(
+            mapped_state,
+            strict=False,
+        )
+
+        print("[INFO] Loaded pretrained Wang checkpoint into feature-gated model.")
+        print("[INFO] Missing keys:", missing)
+        print("[INFO] Unexpected keys:", unexpected)
+        return
+
     if hasattr(target_model, "ecg_encoder") and hasattr(target_model.ecg_encoder, "backbone"):
         load_target = target_model.ecg_encoder.backbone
         print("[INFO] Loading into ecg_encoder.backbone")
@@ -836,6 +978,7 @@ def build_loader(args, split):
         "real12",
         "real12_meta",
         "real12_meta_logit",
+        "real12_meta_feature_gate",
     ]
 
     dataset = PriorReconAblationDataset(
@@ -1158,6 +1301,8 @@ def main():
             "real12_meta",
             "recon12_meta_logit",
             "real12_meta_logit",
+            "recon12_meta_feature_gate",
+            "real12_meta_feature_gate",
         ],
     )
 
@@ -1202,6 +1347,8 @@ def main():
         "real12_meta",
         "recon12_meta_logit",
         "real12_meta_logit",
+        "recon12_meta_feature_gate",
+        "real12_meta_feature_gate",
     ]:
         save_name = "{}_{}".format(args.experiment, args.fusion)
 
@@ -1244,6 +1391,12 @@ def main():
 
         if args.freeze_wang:
             target_model = model.module if isinstance(model, torch.nn.DataParallel) else model
+
+            if hasattr(target_model, "head_feat") and hasattr(target_model, "head_cls"):
+                for name, p in target_model.named_parameters():
+                    if name.startswith(("stem", "layer1", "layer2", "layer3", "head_feat", "head_cls")):
+                        p.requires_grad = False
+                print("[INFO] Frozen Wang feature backbone/head parameters.")
 
             if hasattr(target_model, "ecg_encoder") and hasattr(target_model.ecg_encoder, "backbone"):
                 for p in target_model.ecg_encoder.backbone.parameters():
