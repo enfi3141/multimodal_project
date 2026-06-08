@@ -52,25 +52,39 @@ def safe_float(x, default=0.0):
 
 def build_label_from_scp_codes(scp_codes_str, scp_statements):
     """
-    PTB-XL scp_codes 문자열을 NORM, MI, STTC, CD, HYP multi-hot label로 변환.
+    Same label mapping logic as the Wang direct evaluation code.
+    - ignore scp code with score <= 0
+    - map diagnostic superclass through diagnostic_class
+    - samples with no matched labels will be removed later
     """
     y = np.zeros(len(LABEL_NAMES), dtype=np.float32)
 
     try:
-        scp_dict = ast.literal_eval(scp_codes_str)
+        scp_dict = ast.literal_eval(scp_codes_str) if isinstance(scp_codes_str, str) else scp_codes_str
     except Exception:
         return y
 
-    for code in scp_dict.keys():
-        if code not in scp_statements.index:
+    for code, score in scp_dict.items():
+        try:
+            if float(score) <= 0:
+                continue
+        except Exception:
             continue
 
-        row = scp_statements.loc[code]
+        code = str(code)
 
-        if "diagnostic" in row and row["diagnostic"] != 1:
-            continue
+        if code in LABEL_NAMES:
+            cls = code
+        else:
+            if code not in scp_statements.index:
+                continue
 
-        cls = row.get("diagnostic_class", None)
+            row = scp_statements.loc[code]
+
+            if "diagnostic" in row and not bool(row["diagnostic"]):
+                continue
+
+            cls = str(row.get("diagnostic_class", ""))
 
         if cls in LABEL_NAMES:
             y[LABEL_NAMES.index(cls)] = 1.0
@@ -115,8 +129,6 @@ class PriorReconAblationDataset(data.Dataset):
 
         def first_crop_to_1000(x):
             # x: (N, C, T)
-            # If T > 1000, crop the first 1000 samples.
-            # If T == 1000, keep as-is.
             crop_len = 1000
             t = x.shape[-1]
 
@@ -129,17 +141,30 @@ class PriorReconAblationDataset(data.Dataset):
             raise ValueError("Signal length is shorter than 1000: got {}".format(t))
 
 
-        if self.raw_1lead.shape[-1] != 1000:
-            self.raw_1lead = first_crop_to_1000(self.raw_1lead)
-            self.recon_12lead = first_crop_to_1000(self.recon_12lead)
-            self.real_12lead = first_crop_to_1000(self.real_12lead)
+        def zscore_per_lead(x):
+            # x: (N, C, T)
+            mean = x.mean(axis=-1, keepdims=True)
+            std = x.std(axis=-1, keepdims=True)
+            return ((x - mean) / (std + 1e-8)).astype(np.float32)
 
-            if self.past_12lead is not None:
-                self.past_12lead = first_crop_to_1000(self.past_12lead)
 
-            print("[INFO] First-cropped signals to length:", self.raw_1lead.shape[-1])
-        else:
-            print("[INFO] Signal length:", self.raw_1lead.shape[-1])
+        self.raw_1lead = first_crop_to_1000(self.raw_1lead)
+        self.recon_12lead = first_crop_to_1000(self.recon_12lead)
+        self.real_12lead = first_crop_to_1000(self.real_12lead)
+
+        if self.past_12lead is not None:
+            self.past_12lead = first_crop_to_1000(self.past_12lead)
+
+        print("[INFO] First-cropped signals to length:", self.raw_1lead.shape[-1])
+
+        self.raw_1lead = zscore_per_lead(self.raw_1lead)
+        self.recon_12lead = zscore_per_lead(self.recon_12lead)
+        self.real_12lead = zscore_per_lead(self.real_12lead)
+
+        if self.past_12lead is not None:
+            self.past_12lead = zscore_per_lead(self.past_12lead)
+
+        print("[INFO] Applied per-lead z-score normalization.")
 
         if self.raw_1lead.ndim != 3 or self.raw_1lead.shape[1] != 1:
             raise ValueError("inputs must have shape (N, 1, T), got {}".format(self.raw_1lead.shape))
@@ -180,6 +205,17 @@ class PriorReconAblationDataset(data.Dataset):
                 "Some current paths are not found in ptbxl_database.csv. "
                 "Example: {}".format(missing[:5])
             )
+        
+        def load_wfdb_12lead_first1000(rel_path):
+            import wfdb
+
+            full_path = os.path.join(data_dir, rel_path)
+            sig = wfdb.rdrecord(full_path).p_signal.astype(np.float32).T  # (12, T)
+            sig = sig[:, :1000]
+            sig = (sig - sig.mean(axis=1, keepdims=True)) / (
+                sig.std(axis=1, keepdims=True) + 1e-8
+            )
+            return sig.astype(np.float32)
 
         labels = []
         metadata = []
@@ -212,6 +248,37 @@ class PriorReconAblationDataset(data.Dataset):
 
         self.labels = np.stack(labels).astype(np.float32)
         self.metadata = np.asarray(metadata, dtype=np.float32)
+
+        valid_mask = self.labels.sum(axis=1) > 0
+
+        if not np.all(valid_mask):
+            before = len(valid_mask)
+
+            self.raw_1lead = self.raw_1lead[valid_mask]
+            self.recon_12lead = self.recon_12lead[valid_mask]
+            self.real_12lead = self.real_12lead[valid_mask]
+
+            if self.past_12lead is not None:
+                self.past_12lead = self.past_12lead[valid_mask]
+
+            if self.time_delta is not None:
+                self.time_delta = self.time_delta[valid_mask]
+
+            self.pairs = self.pairs[valid_mask]
+            self.current_paths = self.current_paths[valid_mask]
+            self.labels = self.labels[valid_mask]
+            self.metadata = self.metadata[valid_mask]
+
+            after = len(self.current_paths)
+            print("[INFO] Removed samples without diagnostic labels: {} -> {}".format(before, after))
+
+        if len(self.current_paths) > 0 and self.current_paths[0] in hr_set:
+            self.real_12lead = np.stack(
+                [load_wfdb_12lead_first1000(p) for p in self.current_paths],
+                axis=0,
+            ).astype(np.float32)
+
+            print("[INFO] Rebuilt real_12lead from WFDB filename_hr using Wang preprocessing.")
 
         print("[DATASET] {}".format(npz_path))
         print("  raw_1lead     :", self.raw_1lead.shape)
