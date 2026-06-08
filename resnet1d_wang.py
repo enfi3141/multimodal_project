@@ -255,7 +255,7 @@ if __name__ == "__main__":
 
     # =========================================================================
     # Set paths here
-    DATA_DIR  = Path("/path/to/ptb-xl")   # PTB-XL root (contains ptbxl_database.csv)
+    DATA_DIR  = Path("/workspace/data/ptbxl")   # PTB-XL root (contains ptbxl_database.csv)
     CKPT_PATH = "resnet1d_wang_best.pt"   # path to checkpoint file
     # =========================================================================
 
