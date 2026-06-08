@@ -1394,7 +1394,7 @@ def main():
 
             if hasattr(target_model, "head_feat") and hasattr(target_model, "head_cls"):
                 for name, p in target_model.named_parameters():
-                    if name.startswith(("stem", "layer1", "layer2", "layer3", "head_feat", "head_cls")):
+                    if name.startswith(("stem", "layer1", "layer2", "layer3", "head_feat")):
                         p.requires_grad = False
                 print("[INFO] Frozen Wang feature backbone/head parameters.")
 
@@ -1410,6 +1410,15 @@ def main():
 
     criterion = nn.BCEWithLogitsLoss()
     trainable_params = [p for p in model.parameters() if p.requires_grad]
+
+    print("[INFO] Trainable parameters:")
+    for name, p in model.named_parameters():
+        if p.requires_grad:
+            print("  ", name, tuple(p.shape))
+
+    n_total = sum(p.numel() for p in model.parameters())
+    n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print("[INFO] Trainable params: {} / {}".format(n_train, n_total))
 
     optimizer = None
     if len(trainable_params) > 0:
