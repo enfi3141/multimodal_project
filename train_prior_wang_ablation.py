@@ -349,6 +349,98 @@ class SingleECGClassifier(nn.Module):
 
         return self.classifier(fused)
 
+class WangLogitMetaClassifier(nn.Module):
+    """
+    Full pretrained Wang classifier + metadata fusion.
+
+    ECG branch:
+      ResNet1dWang(x) -> wang_logits (B, 5)
+
+    Metadata branch:
+      MetadataEncoder(meta) -> meta_feat (B, 16)
+      meta_to_logits(meta_feat) -> meta_logits (B, 5)
+
+    Fusion:
+      concat / weighted / gated
+    """
+
+    def __init__(
+        self,
+        input_key,
+        in_channels=12,
+        num_classes=5,
+        meta_in_dim=3,
+        meta_feature_dim=16,
+        fusion_type="concat",
+        dropout=0.2,
+    ):
+        super().__init__()
+
+        self.input_key = input_key
+        self.fusion_type = fusion_type
+        self.num_classes = num_classes
+
+        # Full Wang classifier: output is already disease logits (B, 5)
+        self.wang = ResNet1dWang(n_leads=in_channels, n_classes=num_classes)
+
+        self.meta_encoder = MetadataEncoder(
+            in_dim=meta_in_dim,
+            hidden_dim=32,
+            feature_dim=meta_feature_dim,
+            dropout=0.1,
+        )
+
+        if fusion_type == "concat":
+            # wang_logits(5) + meta_feat(16) -> final logits(5)
+            fusion_dim = num_classes + meta_feature_dim
+            self.classifier = nn.Sequential(
+                nn.Linear(fusion_dim, 32),
+                nn.ReLU(inplace=True),
+                nn.Dropout(dropout),
+                nn.Linear(32, num_classes),
+            )
+
+        elif fusion_type == "weighted":
+            # meta feature -> metadata logits(5), then weighted sum with Wang logits
+            self.meta_to_logits = nn.Linear(meta_feature_dim, num_classes)
+            self.branch_weights = nn.Parameter(torch.ones(2))
+
+        elif fusion_type == "gated":
+            # sample-wise, class-wise gate between Wang logits and metadata logits
+            self.meta_to_logits = nn.Linear(meta_feature_dim, num_classes)
+            self.gate = nn.Sequential(
+                nn.Linear(num_classes + num_classes, 32),
+                nn.ReLU(inplace=True),
+                nn.Linear(32, num_classes),
+                nn.Sigmoid(),
+            )
+
+        else:
+            raise ValueError("Unknown fusion_type: {}".format(fusion_type))
+
+    def forward(self, batch):
+        x = batch[self.input_key]
+
+        wang_logits = self.wang(x)  # (B, 5)
+        meta_feat = self.meta_encoder(batch["metadata"])  # (B, 16)
+
+        if self.fusion_type == "concat":
+            fused = torch.cat([wang_logits, meta_feat], dim=1)
+            return self.classifier(fused)
+
+        elif self.fusion_type == "weighted":
+            meta_logits = self.meta_to_logits(meta_feat)  # (B, 5)
+            weights = torch.softmax(self.branch_weights, dim=0)
+            return weights[0] * wang_logits + weights[1] * meta_logits
+
+        elif self.fusion_type == "gated":
+            meta_logits = self.meta_to_logits(meta_feat)  # (B, 5)
+            gate_input = torch.cat([wang_logits, meta_logits], dim=1)
+            gate = self.gate(gate_input)  # (B, 5)
+            return gate * wang_logits + (1.0 - gate) * meta_logits
+
+        else:
+            raise ValueError("Unknown fusion_type: {}".format(self.fusion_type))
 
 class RawReconClassifier(nn.Module):
     def __init__(
@@ -506,6 +598,24 @@ def build_model(args, meta_in_dim):
             meta_in_dim=meta_in_dim,
         )
     
+    elif args.experiment == "recon12_meta_logit":
+        return WangLogitMetaClassifier(
+            input_key="recon_12lead",
+            in_channels=12,
+            num_classes=args.num_classes,
+            meta_in_dim=meta_in_dim,
+            fusion_type=args.fusion,
+        )
+
+    elif args.experiment == "real12_meta_logit":
+        return WangLogitMetaClassifier(
+            input_key="real_12lead",
+            in_channels=12,
+            num_classes=args.num_classes,
+            meta_in_dim=meta_in_dim,
+            fusion_type=args.fusion,
+        )
+    
     elif args.experiment == "raw1_meta":
         return SingleECGClassifier(
             input_key="raw_1lead",
@@ -584,20 +694,6 @@ def strip_module_prefix(state_dict):
 
 
 def load_pretrained_wang(model, ckpt_path, device):
-    """
-    Load pretrained ResNet1dWang weights into SingleECGClassifier's Wang backbone.
-
-    Expected target:
-      model.ecg_encoder.backbone
-    or if DataParallel:
-      model.module.ecg_encoder.backbone
-
-    The checkpoint may be:
-      1) pure state_dict
-      2) {"state_dict": ...}
-      3) {"model_state_dict": ...}
-    """
-
     print("[INFO] Loading pretrained Wang checkpoint:", ckpt_path)
 
     ckpt = torch.load(ckpt_path, map_location=device)
@@ -613,13 +709,18 @@ def load_pretrained_wang(model, ckpt_path, device):
 
     target_model = model.module if isinstance(model, torch.nn.DataParallel) else model
 
-    if not hasattr(target_model, "ecg_encoder"):
-        raise ValueError("This experiment does not have ecg_encoder. Cannot load Wang checkpoint.")
+    if hasattr(target_model, "ecg_encoder") and hasattr(target_model.ecg_encoder, "backbone"):
+        load_target = target_model.ecg_encoder.backbone
+        print("[INFO] Loading into ecg_encoder.backbone")
 
-    if not hasattr(target_model.ecg_encoder, "backbone"):
-        raise ValueError("ecg_encoder does not have backbone. Cannot load Wang checkpoint.")
+    elif hasattr(target_model, "wang"):
+        load_target = target_model.wang
+        print("[INFO] Loading into full Wang classifier")
 
-    missing, unexpected = target_model.ecg_encoder.backbone.load_state_dict(
+    else:
+        raise ValueError("No compatible Wang model found for pretrained loading.")
+
+    missing, unexpected = load_target.load_state_dict(
         state,
         strict=False,
     )
@@ -956,6 +1057,8 @@ def main():
             "raw1_recon12_meta",
             "real12",
             "real12_meta",
+            "recon12_meta_logit",
+            "real12_meta_logit",
         ],
     )
 
@@ -992,7 +1095,15 @@ def main():
 
     save_name = args.experiment
 
-    if args.experiment in ["raw1_meta", "recon12_meta", "raw1_recon12", "raw1_recon12_meta", "real12_meta"]:
+    if args.experiment in [
+        "raw1_meta",
+        "recon12_meta",
+        "raw1_recon12",
+        "raw1_recon12_meta",
+        "real12_meta",
+        "recon12_meta_logit",
+        "real12_meta_logit",
+    ]:
         save_name = "{}_{}".format(args.experiment, args.fusion)
 
     save_dir = os.path.join(args.checkpoint, save_name)
@@ -1019,9 +1130,16 @@ def main():
 
         if args.freeze_wang:
             target_model = model.module if isinstance(model, torch.nn.DataParallel) else model
-            for p in target_model.ecg_encoder.backbone.parameters():
-                p.requires_grad = False
-            print("[INFO] Frozen Wang backbone parameters.")
+
+            if hasattr(target_model, "ecg_encoder") and hasattr(target_model.ecg_encoder, "backbone"):
+                for p in target_model.ecg_encoder.backbone.parameters():
+                    p.requires_grad = False
+                print("[INFO] Frozen Wang backbone parameters.")
+
+            elif hasattr(target_model, "wang"):
+                for p in target_model.wang.parameters():
+                    p.requires_grad = False
+                print("[INFO] Frozen full Wang classifier parameters.")
 
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(
