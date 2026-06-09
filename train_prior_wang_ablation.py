@@ -159,15 +159,6 @@ class PriorReconAblationDataset(data.Dataset):
 
         print("[INFO] Applied global z-score normalization per sample.")
 
-        self.raw_1lead = zscore_per_lead(self.raw_1lead)
-        self.recon_12lead = zscore_per_lead(self.recon_12lead)
-        self.real_12lead = zscore_per_lead(self.real_12lead)
-
-        if self.past_12lead is not None:
-            self.past_12lead = zscore_per_lead(self.past_12lead)
-
-        print("[INFO] Applied per-lead z-score normalization.")
-
         if self.raw_1lead.ndim != 3 or self.raw_1lead.shape[1] != 1:
             raise ValueError("inputs must have shape (N, 1, T), got {}".format(self.raw_1lead.shape))
 
@@ -218,7 +209,6 @@ class PriorReconAblationDataset(data.Dataset):
             return sig.astype(np.float32)
 
         labels = []
-        metadata = []
 
         for p in self.current_paths:
             row = df.loc[p]
@@ -226,28 +216,40 @@ class PriorReconAblationDataset(data.Dataset):
             label = build_label_from_scp_codes(row["scp_codes"], scp_statements)
             labels.append(label)
 
-            age = safe_float(row["age"], default=60.0)
-            age_norm = age / 100.0
-
-            sex = safe_float(row["sex"], default=0.0)
-
-            if sex == 1.0:
-                sex_male = 1.0
-                sex_female = 0.0
-            else:
-                sex_male = 0.0
-                sex_female = 1.0
-
-            meta = [
-                age_norm,
-                sex_male,
-                sex_female,
-            ]
-
-            metadata.append(meta)
-
         self.labels = np.stack(labels).astype(np.float32)
-        self.metadata = np.asarray(metadata, dtype=np.float32)
+
+        if "meta" in z.files:
+            self.metadata = z["meta"].astype(np.float32)
+            self.meta_cols = z["meta_cols"] if "meta_cols" in z.files else None
+            print("[INFO] Loaded metadata from NPZ:", self.metadata.shape)
+
+        else:
+            metadata = []
+
+            for p in self.current_paths:
+                row = df.loc[p]
+
+                age = safe_float(row["age"], default=60.0)
+                age_norm = age / 100.0
+
+                sex = safe_float(row["sex"], default=0.0)
+
+                if sex == 1.0:
+                    sex_male = 1.0
+                    sex_female = 0.0
+                else:
+                    sex_male = 0.0
+                    sex_female = 1.0
+
+                metadata.append([
+                    age_norm,
+                    sex_male,
+                    sex_female,
+                ])
+
+            self.metadata = np.asarray(metadata, dtype=np.float32)
+            self.meta_cols = None
+            print("[INFO] Built age/sex metadata from CSV:", self.metadata.shape)
 
         valid_mask = self.labels.sum(axis=1) > 0
 
@@ -536,7 +538,7 @@ class WangFeatureGatedMetaClassifier(nn.Module):
         in_channels=12,
         num_classes=5,
         meta_in_dim=3,
-        meta_feature_dim=16,
+        meta_feature_dim=128,
         feature_dim=128,
     ):
         super().__init__()
@@ -562,9 +564,9 @@ class WangFeatureGatedMetaClassifier(nn.Module):
 
         self.meta_encoder = MetadataEncoder(
             in_dim=meta_in_dim,
-            hidden_dim=32,
+            hidden_dim=256,
             feature_dim=meta_feature_dim,
-            dropout=0.1,
+            dropout=0.2,
         )
 
         self.meta_proj = nn.Linear(meta_feature_dim, feature_dim)
