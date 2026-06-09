@@ -9,11 +9,37 @@ import wfdb
 from tqdm import tqdm
 
 
-def load_ecg_12lead(data_dir, rel_path, normalize=True):
+LABEL_NAMES = ["NORM", "MI", "STTC", "CD", "HYP"]
+
+
+DROP_META_COLS = [
+    # label leakage
+    "scp_codes",
+    "diagnostic_superclass",
+    "diagnostic_class",
+    "diagnostic_subclass",
+    "statement_codes",
+
+    # signal path / identifiers
+    "filename_lr",
+    "filename_hr",
+    "ecg_id",
+    "patient_id",
+
+    # split leakage
+    "strat_fold",
+]
+
+
+def load_ecg_12lead(data_dir, rel_path, crop_len=1000, normalize=False):
     path = os.path.join(data_dir, rel_path)
-    signal, meta = wfdb.rdsamp(path)
-    signal = signal.astype(np.float32)  # (T, 12)
-    signal = signal.T                   # (12, T)
+    signal, _ = wfdb.rdsamp(path)
+    signal = signal.astype(np.float32).T  # (12, T)
+
+    if signal.shape[-1] < crop_len:
+        raise ValueError(f"Signal too short: {rel_path}, shape={signal.shape}")
+
+    signal = signal[:, :crop_len]
 
     if normalize:
         signal = (signal - signal.mean(axis=1, keepdims=True)) / (
@@ -21,6 +47,81 @@ def load_ecg_12lead(data_dir, rel_path, normalize=True):
         )
 
     return signal.astype(np.float32)
+
+
+def load_superclass_map(data_dir):
+    scp_path = os.path.join(data_dir, "scp_statements.csv")
+    scp_df = pd.read_csv(scp_path, index_col=0)
+
+    code_to_class = {}
+
+    for code, row in scp_df.iterrows():
+        if bool(row.get("diagnostic", False)):
+            diagnostic_class = row.get("diagnostic_class", None)
+            if diagnostic_class in LABEL_NAMES:
+                code_to_class[str(code)] = diagnostic_class
+
+    return code_to_class
+
+
+def make_label(scp_codes_str, code_to_class):
+    try:
+        scp_codes = ast.literal_eval(scp_codes_str) if isinstance(scp_codes_str, str) else scp_codes_str
+    except Exception:
+        scp_codes = {}
+
+    y = np.zeros(len(LABEL_NAMES), dtype=np.float32)
+
+    for code, score in scp_codes.items():
+        try:
+            if float(score) <= 0:
+                continue
+        except Exception:
+            continue
+
+        code = str(code)
+
+        if code in LABEL_NAMES:
+            cls = code
+        else:
+            cls = code_to_class.get(code, None)
+
+        if cls in LABEL_NAMES:
+            y[LABEL_NAMES.index(cls)] = 1.0
+
+    return y
+
+
+def build_all_meta_df(df):
+    meta = df.drop(columns=[c for c in DROP_META_COLS if c in df.columns]).copy()
+
+    if "recording_date" in meta.columns:
+        dt = pd.to_datetime(meta["recording_date"], errors="coerce")
+        meta["recording_year"] = dt.dt.year
+        meta["recording_month"] = dt.dt.month
+        meta["recording_day"] = dt.dt.day
+        meta = meta.drop(columns=["recording_date"])
+
+    for c in meta.columns:
+        if meta[c].dtype == bool:
+            meta[c] = meta[c].astype(int)
+
+    num_cols = meta.select_dtypes(include=["number"]).columns.tolist()
+    cat_cols = [c for c in meta.columns if c not in num_cols]
+
+    if len(num_cols) > 0:
+        medians = meta[num_cols].median()
+        meta[num_cols] = meta[num_cols].fillna(medians)
+
+    for c in cat_cols:
+        meta[c] = meta[c].fillna("missing").astype(str)
+
+    if len(cat_cols) > 0:
+        meta = pd.get_dummies(meta, columns=cat_cols)
+
+    meta = meta.astype(np.float32)
+
+    return meta
 
 
 def collect_exclude_paths(npz_paths):
@@ -37,11 +138,13 @@ def collect_exclude_paths(npz_paths):
 
         pairs = z["pairs"]
 
-        # pairs[:, 0] = past_path, pairs[:, 1] = current_path
         for p in pairs[:, 0]:
-            exclude.add(str(p))
+            if str(p) != "":
+                exclude.add(str(p))
+
         for p in pairs[:, 1]:
-            exclude.add(str(p))
+            if str(p) != "":
+                exclude.add(str(p))
 
     return exclude
 
@@ -55,6 +158,8 @@ def make_npz(
 ):
     db_path = os.path.join(data_dir, "ptbxl_database.csv")
     df = pd.read_csv(db_path)
+
+    code_to_class = load_superclass_map(data_dir)
 
     path_col = "filename_hr" if use_hr else "filename_lr"
 
@@ -73,42 +178,62 @@ def make_npz(
         after = len(df)
         print(f"[INFO] Excluded paired records: {before - after}")
 
+    meta_df = build_all_meta_df(df)
+    meta_cols = meta_df.columns.tolist()
+
+    print("[INFO] Metadata dim:", len(meta_cols))
+
     inputs = []
     preds = []
     targets = []
+    labels = []
+    metas = []
     pairs = []
+    ids = []
 
-    for _, row in tqdm(df.iterrows(), total=len(df)):
+    for idx, row in tqdm(df.iterrows(), total=len(df)):
         current_path = str(row[path_col])
 
-        ecg12 = load_ecg_12lead(data_dir, current_path)  # (12, T)
-
-        if use_hr:
-            t = ecg12.shape[-1]
-            crop_len = 1000
-
-            if t < crop_len:
-                print("[SKIP] too short:", current_path, ecg12.shape)
-                continue
-
-            ecg12 = ecg12[:, :crop_len]
+        try:
+            ecg12 = load_ecg_12lead(
+                data_dir=data_dir,
+                rel_path=current_path,
+                crop_len=1000,
+                normalize=True,
+            )
+        except Exception as e:
+            print("[SKIP] load failed:", current_path, e)
+            continue
 
         if ecg12.shape[0] != 12:
             print("[SKIP] invalid lead shape:", current_path, ecg12.shape)
             continue
 
-        lead1 = ecg12[0:1, :]  # (1, T)
+        y = make_label(row["scp_codes"], code_to_class)
+
+        if y.sum() == 0:
+            print("[SKIP] no superclass label:", current_path)
+            continue
+
+        meta_vec = meta_df.loc[idx].values.astype(np.float32)
+
+        lead1 = ecg12[0:1, :]
 
         inputs.append(lead1)
         preds.append(ecg12)
         targets.append(ecg12)
-
+        labels.append(y)
+        metas.append(meta_vec)
         pairs.append(["", current_path, 0])
+        ids.append(int(row["ecg_id"]))
 
     inputs = np.stack(inputs).astype(np.float32)
     preds = np.stack(preds).astype(np.float32)
     targets = np.stack(targets).astype(np.float32)
+    labels = np.stack(labels).astype(np.float32)
+    metas = np.stack(metas).astype(np.float32)
     pairs = np.asarray(pairs, dtype=object)
+    ids = np.asarray(ids, dtype=np.int64)
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -117,14 +242,22 @@ def make_npz(
         inputs=inputs,
         preds=preds,
         targets=targets,
+        labels=labels,
+        meta=metas,
+        meta_cols=np.asarray(meta_cols, dtype=object),
         pairs=pairs,
+        ids=ids,
     )
 
     print("[SAVED]", output_path)
-    print("inputs :", inputs.shape)
-    print("preds  :", preds.shape)
-    print("targets:", targets.shape)
-    print("pairs  :", pairs.shape)
+    print("inputs   :", inputs.shape)
+    print("preds    :", preds.shape)
+    print("targets  :", targets.shape)
+    print("labels   :", labels.shape)
+    print("meta     :", metas.shape)
+    print("meta_cols:", len(meta_cols))
+    print("pairs    :", pairs.shape)
+    print("ids      :", ids.shape)
 
 
 def main():

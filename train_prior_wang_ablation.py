@@ -143,21 +143,21 @@ class PriorReconAblationDataset(data.Dataset):
             raise ValueError("Signal length is shorter than 1000: got {}".format(t))
 
 
-        def zscore_per_lead(x):
+        def zscore_global(x):
             # x: (N, C, T)
-            mean = x.mean(axis=-1, keepdims=True)
-            std = x.std(axis=-1, keepdims=True)
+            mean = x.mean(axis=(1, 2), keepdims=True)
+            std = x.std(axis=(1, 2), keepdims=True)
             return ((x - mean) / (std + 1e-8)).astype(np.float32)
 
 
-        self.raw_1lead = first_crop_to_1000(self.raw_1lead)
-        self.recon_12lead = first_crop_to_1000(self.recon_12lead)
-        self.real_12lead = first_crop_to_1000(self.real_12lead)
+        self.raw_1lead = zscore_global(self.raw_1lead)
+        self.recon_12lead = zscore_global(self.recon_12lead)
+        self.real_12lead = zscore_global(self.real_12lead)
 
         if self.past_12lead is not None:
-            self.past_12lead = first_crop_to_1000(self.past_12lead)
+            self.past_12lead = zscore_global(self.past_12lead)
 
-        print("[INFO] First-cropped signals to length:", self.raw_1lead.shape[-1])
+        print("[INFO] Applied global z-score normalization per sample.")
 
         self.raw_1lead = zscore_per_lead(self.raw_1lead)
         self.recon_12lead = zscore_per_lead(self.recon_12lead)
@@ -214,9 +214,7 @@ class PriorReconAblationDataset(data.Dataset):
             full_path = os.path.join(data_dir, rel_path)
             sig = wfdb.rdrecord(full_path).p_signal.astype(np.float32).T  # (12, T)
             sig = sig[:, :1000]
-            sig = (sig - sig.mean(axis=1, keepdims=True)) / (
-                sig.std(axis=1, keepdims=True) + 1e-8
-            )
+            sig = (sig - sig.mean()) / (sig.std() + 1e-8)
             return sig.astype(np.float32)
 
         labels = []
