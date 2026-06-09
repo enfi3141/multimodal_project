@@ -150,6 +150,13 @@ class PriorReconAblationDataset(data.Dataset):
             return ((x - mean) / (std + 1e-8)).astype(np.float32)
 
 
+        self.raw_1lead = first_crop_to_1000(self.raw_1lead)
+        self.recon_12lead = first_crop_to_1000(self.recon_12lead)
+        self.real_12lead = first_crop_to_1000(self.real_12lead)
+
+        if self.past_12lead is not None:
+            self.past_12lead = first_crop_to_1000(self.past_12lead)
+
         self.raw_1lead = zscore_per_lead(self.raw_1lead)
         self.recon_12lead = zscore_per_lead(self.recon_12lead)
         self.real_12lead = zscore_per_lead(self.real_12lead)
