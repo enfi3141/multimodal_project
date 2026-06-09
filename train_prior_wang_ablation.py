@@ -1003,6 +1003,7 @@ def build_loader(args, split):
         shuffle=(split == "train"),
         num_workers=args.workers,
         pin_memory=True,
+        drop_last=(split == "train"),
     )
 
     return loader, dataset
