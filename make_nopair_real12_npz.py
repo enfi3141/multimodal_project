@@ -19,6 +19,7 @@ DROP_META_COLS = [
     "diagnostic_class",
     "diagnostic_subclass",
     "statement_codes",
+    "report",
 
     # signal path / identifiers
     "filename_lr",
