@@ -1405,7 +1405,7 @@ def main():
             if hasattr(target_model, "head_feat") and hasattr(target_model, "head_cls"):
                 for name, p in target_model.named_parameters():
                     # freeze only early Wang layers
-                    if name.startswith(("stem", "layer1", "layer2")):
+                    if name.startswith(("stem", "layer1", "layer3", "head_feat", "head_cls")):
                         p.requires_grad = False
                     else:
                         p.requires_grad = True
