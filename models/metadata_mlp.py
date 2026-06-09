@@ -3,30 +3,30 @@ import torch.nn as nn
 
 
 class MetadataEncoder(nn.Module):
-    """
-    Input : (B, in_dim)
-    Output: (B, feature_dim)
-
-    For expanded PTB-XL metadata, in_dim can be large
-    e.g., 8539 after one-hot encoding.
-    """
     def __init__(self, in_dim, hidden_dim=256, feature_dim=128, dropout=0.2):
         super().__init__()
-
-        self.net = nn.Sequential(
+        self.block1 = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
             nn.BatchNorm1d(hidden_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-
-            nn.Linear(hidden_dim, feature_dim),
-            nn.BatchNorm1d(feature_dim),
+        )
+        self.block2 = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
         )
+        self.out = nn.Sequential(
+            nn.Linear(hidden_dim, feature_dim),
+            nn.BatchNorm1d(feature_dim),
+            nn.ReLU(inplace=True),
+        )
 
     def forward(self, x):
-        return self.net(x)
+        h = self.block1(x)
+        h = h + self.block2(h)
+        return self.out(h)
 
 
 class MetadataClassifier(nn.Module):

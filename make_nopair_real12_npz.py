@@ -116,10 +116,6 @@ def build_all_meta_df(df):
         medians = meta[num_cols].median()
         meta[num_cols] = meta[num_cols].fillna(medians)
 
-        means = meta[num_cols].mean()
-        stds = meta[num_cols].std().replace(0, 1)
-        meta[num_cols] = (meta[num_cols] - means) / (stds + 1e-8)
-
     for c in cat_cols:
         meta[c] = meta[c].fillna("missing").astype(str)
 
